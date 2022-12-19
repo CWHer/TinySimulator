@@ -97,7 +97,10 @@ class Operator:
     def __hash__(self) -> int:
         return id(self)
 
-    def initMemory(self):
+    def init(self, pred_ops, succ_ops):
+        self.pred_ops = pred_ops
+        self.succ_ops = succ_ops
+        self.pruned_output_channels = set()
         # fmt: off
         self.param_locations = [MemoryType.SLOW for _ in range(self.num_input_channels)]
         self.input_locations = [MemoryType.NONE for _ in range(self.num_input_channels)]
@@ -105,12 +108,6 @@ class Operator:
         self.grad_locations = [MemoryType.NONE for _ in range(self.num_output_channels)]
         self.pass_grad_locations = [MemoryType.NONE for _ in range(self.num_input_channels)]
         # fmt: on
-
-    def link(self,
-             pred_ops: List[Operator],
-             succ_ops: List[Operator]):
-        self.pred_ops = pred_ops
-        self.succ_ops = succ_ops
 
     def checkNumChannels(self, is_forward: bool):
         # assert len(self.output_channel_accuracy) == self.num_output_channels
@@ -189,19 +186,19 @@ class Operator:
     def forward(self, channel_ids) -> Tuple[float, float]:
         printError(not self.canForward(channel_ids))
         r = self.num_input_channels / len(channel_ids)
-        memory_peek = r * self.forward_memory_peek
+        memory_delta = r * self.forward_memory_peek
         time_elapsed = r * self.forward_time_elapsed
-        self.last_stats = (memory_peek, len(channel_ids), "forward")
-        return memory_peek, time_elapsed
+        self.last_stats = (memory_delta, len(channel_ids), "forward")
+        return memory_delta, time_elapsed
 
     def backward(self, channel_ids) -> Tuple[float, float]:
         printError(not self.isForwardDone())
         printError(not self.canBackward(channel_ids))
         r = self.num_output_channels / len(channel_ids)
-        memory_peek = r * self.backward_memory_peek
+        memory_delta = r * self.backward_memory_peek
         time_elapsed = r * self.backward_time_elapsed
-        self.last_stats = (memory_peek, len(channel_ids), "backward")
-        return memory_peek, time_elapsed
+        self.last_stats = (memory_delta, len(channel_ids), "backward")
+        return memory_delta, time_elapsed
 
     def memoryOp(self, memory_type: str, channel_ids: List[int],
                  prev_type, new_type, bandwidth=0.1) -> Tuple[float, float]:
@@ -241,7 +238,7 @@ class Operator:
                 return False
         return True
 
-    def optimize(self, channel_ids) -> float:
+    def optimize(self, channel_ids) -> Tuple[float, float]:
         # NOTE: W' = W - lr * dW, DO NOT require extra memory
         printError(not self.isForwardDone())
         printError(not self.isBackwardDone())
@@ -249,7 +246,7 @@ class Operator:
         r = self.num_output_channels / len(channel_ids)
         time_elapsed = r * self.optimize_time_elapsed
         self.last_stats = (0, len(channel_ids), "optimize")
-        return time_elapsed
+        return 0, time_elapsed
 
     def prune(self, channel_ids) -> None:
         self.pruned_output_channels |= set(channel_ids)

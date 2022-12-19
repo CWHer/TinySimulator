@@ -39,3 +39,6 @@ class Decision:
     # NOTE: this is only for commit decision
     #   is this commit the last commit for forward/backward ?
     is_last: bool = False
+
+    def __hash__(self) -> int:
+        return id(self)
