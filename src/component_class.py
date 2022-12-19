@@ -2,8 +2,20 @@ from __future__ import annotations
 
 import dataclasses
 from enum import Enum
-from inspect import currentframe, getframeinfo
-from typing import List, Tuple
+from typing import List, Set, Tuple
+
+from utils import printError
+
+
+@dataclasses.dataclass
+class RunTime:
+    # machine related
+    memory_limit: float  # fast memory limit
+    cross_level_bandwidth_read: float
+    cross_level_bandwidth_write: float
+
+    # TODO: prune related
+    # target_accuracy: float
 
 
 class MemoryType(Enum):
@@ -14,6 +26,7 @@ class MemoryType(Enum):
     """
     FAST = 1
     SLOW = 2
+    NONE = 3
 
 
 @dataclasses.dataclass
@@ -36,8 +49,8 @@ class Operator:
 
     # network topology
     # NOTE:
-    #   1. when an operator has multiple successors,
-    #       the output is copied to each successor
+    #   1. when an operator has multiple predecessors,
+    #       the input is concatenated from each predecessor
     #   2. when an operator has multiple successors,
     #       the output is copied to each successor
     pred_ops: List[Operator] = None
@@ -45,17 +58,26 @@ class Operator:
 
     # TODO: pruning related
     # output_channel_accuracy: List[float]  # num output channels
+    pruned_output_channels: Set[int] = None
 
-    # simulator related
-    # forward: X' = f(w, X)
-    # backward: dW = dX' * df/dw, dX = dX' * df/dX
-    # (num input channels for forward, num output channels for backward)
+    # memory related
+    # NOTE:
+    #   1. forward: X' = f(w, X)
+    #       (pred_)output(ch) + param(in_ch) -> output(all)
+    #       (pred_)output(ch) -> input(ch)
+    #   2. backward: dW = dX' * df/dw, dX = dX' * df/dX
+    #       (succ_)pass_grad(ch) + param(out_ch) -> pass_grad(all)
+    #       (succ_)pass_grad(ch) + input(all) -> grad(ch)
+    #   3. optimize: W' = W - lr * dW
+    #       param(out_ch) + grad(ch)
+
+    # (NOTE: num input channels for forward, num output channels for backward)
     param_locations: List[MemoryType] = None
-    input_locations: List[MemoryType] = None  # num input channels
-    output_locations: List[MemoryType] = None  # num output channels
-    grad_locations: List[MemoryType] = None  # num output channels
-    pass_grad_locations: List[MemoryType] = None  # num input channels
-    # TODO: NOTE: when to drop data
+    input_locations: List[MemoryType] = None        # num input channels
+    output_locations: List[MemoryType] = None       # num output channels
+    grad_locations: List[MemoryType] = None         # num output channels
+    pass_grad_locations: List[MemoryType] = None    # num input channels
+    # NOTE: when to purge data
     #   1. when output data is used by all successors (output)
     #   2. when passing gradient data to all predecessors (pass_grad)
     #   3. when input data is used by gradient computation (input)
@@ -63,16 +85,22 @@ class Operator:
 
     # forward_count == num_input_channels means forward is done
     forward_count: int = 0
-    # backward_count == res_output_channels (pruning) means backward is done
+    # backward_count == res_output_channels (after pruning) means backward is done
     backward_count: int = 0
+    # optimize_count == res_output_channels (after pruning) means optimize is done
+    optimize_count: int = 0
+
+    # commit related (forward, backward, optimize)
+    # (delta_memory, delta_count, action_name)
+    last_stats: Tuple[float, int, str] = None
 
     def initMemory(self):
         # fmt: off
         self.param_locations = [MemoryType.SLOW for _ in range(self.num_input_channels)]
-        self.input_locations = [MemoryType.SLOW for _ in range(self.num_input_channels)]
-        self.output_locations = [MemoryType.SLOW for _ in range(self.num_output_channels)]
-        self.grad_locations = [MemoryType.SLOW for _ in range(self.num_output_channels)]
-        self.pass_grad_locations = [MemoryType.SLOW for _ in range(self.num_input_channels)]
+        self.input_locations = [MemoryType.NONE for _ in range(self.num_input_channels)]
+        self.output_locations = [MemoryType.NONE for _ in range(self.num_output_channels)]
+        self.grad_locations = [MemoryType.NONE for _ in range(self.num_output_channels)]
+        self.pass_grad_locations = [MemoryType.NONE for _ in range(self.num_input_channels)]
         # fmt: on
 
     def link(self,
