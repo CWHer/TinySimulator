@@ -1,8 +1,6 @@
-from simulator import Simulator
-
 from component_class import Operator, RunTime
-from solution_class import Decision, DecisionPhase, DecisionType, MemoryBlockType
-
+from simulator import Simulator
+from solution_class import Decision, DecisionType, MemoryBlockType
 
 if __name__ == "__main__":
     # Let's build a simple network
@@ -36,58 +34,95 @@ if __name__ == "__main__":
                     param_size=5, input_size=5, output_size=1,
                     grad_size=5, pass_grad_size=5,
                     num_input_channels=5, num_output_channels=1)
-    op_A.link(pred_ops=[], succ_ops=[op_B, op_C])
-    op_B.link(pred_ops=[op_A], succ_ops=[op_D])
-    op_C.link(pred_ops=[op_A], succ_ops=[op_D])
-    op_D.link(pred_ops=[op_B, op_C], succ_ops=[])
+    op_A.init(pred_ops=[], succ_ops=[op_B, op_C])
+    op_B.init(pred_ops=[op_A], succ_ops=[op_D])
+    op_C.init(pred_ops=[op_A], succ_ops=[op_D])
+    op_D.init(pred_ops=[op_B, op_C], succ_ops=[])
 
     computation_graph = [op_A, op_B, op_C, op_D]
-    for op in computation_graph:
-        op.initMemory()
 
-    run_time = RunTime(memory=10000,
+    run_time = RunTime(memory_limit=10000,
                        cross_level_bandwidth_read=2,
                        cross_level_bandwidth_write=1)
 
     # Let's compose a naive solution
     decisions = []
     current_wall_time = 0
+    # NOTE: forward phase
+    #   1. load (allocate & copy) input data
+    #   2. load parameters
+    #   3. allocate output data
+    #   4. forward
     for op in computation_graph:
-        decision_types = [DecisionType.LOAD, DecisionType.LOAD,
-                          DecisionType.LOAD, DecisionType.COMPUTE]
-        memory_blocks = [MemoryBlockType.PARAM, MemoryBlockType.INPUT,
-                         MemoryBlockType.OUTPUT, None]
-        channel_ids_list = [list(range(op.num_input_channels)),
-                            list(range(op.num_input_channels)),
-                            list(range(op.num_output_channels)),
-                            list(range(op.num_input_channels))]
+        decision_types = [
+            DecisionType.LOAD if len(
+                op.pred_ops) == 0 else DecisionType.ALLOCATE,
+            DecisionType.LOAD,
+            DecisionType.ALLOCATE,
+            DecisionType.FORWARD
+        ]
+        memory_blocks = [
+            MemoryBlockType.INPUT,
+            MemoryBlockType.PARAM,
+            MemoryBlockType.OUTPUT,
+            None
+        ]
+        channel_ids_list = [
+            list(range(op.num_input_channels)),
+            list(range(op.num_input_channels)),
+            list(range(op.num_output_channels)),
+            list(range(op.num_input_channels))
+        ]
         for i in range(4):
             decision = Decision(wall_time=current_wall_time,
-                                decision_phase=DecisionPhase.FORWARD,
                                 decision_type=decision_types[i],
-                                memory_block=memory_blocks[i],
                                 operator=op,
+                                memory_block=memory_blocks[i],
                                 channel_ids=channel_ids_list[i])
             decisions.append(decision)
             current_wall_time += 50
+    # NOTE: backward phase
+    #   1. allocate gradient data
+    #   2. allocate pass gradient data
+    #   3. backward & optimize
     for op in reversed(computation_graph):
-        decision_types = [DecisionType.LOAD, DecisionType.LOAD,
-                          DecisionType.COMPUTE]
-        memory_blocks = [MemoryBlockType.GRAD, MemoryBlockType.PASS_GRAD, None]
-        channel_ids_list = [list(range(op.num_output_channels)),
-                            list(range(op.num_input_channels)),
-                            list(range(op.num_output_channels))]
-        for i in range(3):
+        decision_types = [
+            DecisionType.ALLOCATE,
+            DecisionType.ALLOCATE,
+            DecisionType.BACKWARD,
+            DecisionType.OPTIMIZE
+        ]
+        memory_blocks = [
+            MemoryBlockType.GRAD,
+            MemoryBlockType.PASS_GRAD,
+            None,
+            None
+        ]
+        channel_ids_list = [
+            list(range(op.num_output_channels)),
+            list(range(op.num_input_channels)),
+            list(range(op.num_output_channels)),
+            list(range(op.num_output_channels))
+        ]
+        for i in range(4):
             decision = Decision(wall_time=current_wall_time,
-                                decision_phase=DecisionPhase.BACKWARD,
                                 decision_type=decision_types[i],
-                                memory_block=memory_blocks[i],
                                 operator=op,
+                                memory_block=memory_blocks[i],
                                 channel_ids=channel_ids_list[i])
             decisions.append(decision)
             current_wall_time += 50
+    # NOTE: write back parameters
+    for op in reversed(computation_graph):
+        decision = Decision(
+            wall_time=current_wall_time,
+            decision_type=DecisionType.STORE,
+            operator=op,
+            memory_block=MemoryBlockType.PARAM,
+            channel_ids=list(range(op.num_output_channels)))
+        decisions.append(decision)
+        current_wall_time += 50
 
     simulator = Simulator(run_time, computation_graph)
-    simulator.run(decisions)
-    if simulator.isValid():
-        print("Total wall time: {:.2f} s.".format(simulator.getTime()))
+    simulator.staticProcess(decisions)
+    simulator.dynamicSim()
