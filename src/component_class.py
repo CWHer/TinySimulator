@@ -94,6 +94,9 @@ class Operator:
     # (delta_memory, delta_count, action_name)
     last_stats: Tuple[float, int, str] = None
 
+    def __hash__(self) -> int:
+        return id(self)
+
     def initMemory(self):
         # fmt: off
         self.param_locations = [MemoryType.SLOW for _ in range(self.num_input_channels)]
@@ -111,122 +114,163 @@ class Operator:
 
     def checkNumChannels(self, is_forward: bool):
         # assert len(self.output_channel_accuracy) == self.num_output_channels
-        assert len(self.param_locations) == (
-            self.num_input_channels if is_forward else self.num_output_channels), \
-            "file: {}, line: {}".format(
-                __file__, getframeinfo(currentframe()).lineno)
-        assert len(self.input_locations) == self.num_input_channels, \
-            "file: {}, line: {}".format(
-                __file__, getframeinfo(currentframe()).lineno)
-        assert len(self.output_locations) == self.num_output_channels, \
-            "file: {}, line: {}".format(
-                __file__, getframeinfo(currentframe()).lineno)
-        assert len(self.pass_grad_locations) == self.num_input_channels, \
-            "file: {}, line: {}".format(
-                __file__, getframeinfo(currentframe()).lineno)
+        printError(len(self.param_locations) != (
+            self.num_input_channels if is_forward else self.num_output_channels))
+        printError(len(self.input_locations) != self.num_input_channels)
+        printError(len(self.output_locations) != self.num_output_channels)
+        printError(len(self.grad_locations) != self.num_output_channels)
+        printError(len(self.pass_grad_locations) != self.num_input_channels)
+
+    def isAllDone(self) -> bool:
+        # NOTE: all parameters would be write to slow memory
+        if any(param_loc != MemoryType.SLOW
+               for param_loc in self.param_locations):
+            return False
+        return self.isForwardDone() and \
+            self.isBackwardDone() and self.isOptimizeDone()
 
     def isForwardDone(self) -> bool:
         return self.forward_count == self.num_input_channels
 
     def isBackwardDone(self) -> bool:
-        # TODO: FIXME: prune
-        return self.backward_count == self.num_output_channels
+        return self.backward_count == \
+            self.num_output_channels - len(self.pruned_output_channels)
+
+    def isOptimizeDone(self) -> bool:
+        return self.optimize_count == \
+            self.num_output_channels - len(self.pruned_output_channels)
 
     def canForward(self, channel_ids) -> bool:
+        if any(output_loc != MemoryType.FAST
+               for output_loc in self.output_locations):
+            return False
+        for channel_id in channel_ids:
+            if self.param_locations[channel_id] != MemoryType.FAST \
+                    or self.input_locations[channel_id] != MemoryType.FAST:
+                return False
+
         channel_offset = 0
         for pred_op in self.pred_ops:
-            if self.forward_count != 0 and \
-                any(output_loc == MemoryType.SLOW
-                    for output_loc in self.output_locations):
-                return False
+            # NOTE: when an operator has multiple predecessors,
+            #   the input is concatenated from each predecessor
             for channel_id in channel_ids:
-                # NOTE: when an operator has multiple predecessors,
-                #   the input is concatenated from each predecessor
                 pred_channel_id = channel_id - channel_offset
                 if 0 <= pred_channel_id < pred_op.num_output_channels and \
-                        not pred_op.isForwardDone() and \
-                        pred_op.output_locations[pred_channel_id] == MemoryType.SLOW:
-                    return False
-                if self.param_locations[channel_id] \
-                        == MemoryType.SLOW:
+                    (not pred_op.isForwardDone() or pred_op.output_locations[
+                        pred_channel_id] != MemoryType.FAST):
                     return False
             channel_offset += pred_op.num_output_channels
+
         return True
 
     def canBackward(self, channel_ids) -> bool:
-        for succ_op in self.succ_ops:
-            # HACK: FIXME: each input channel is used by each output channel
-            if any(input_loc == MemoryType.SLOW
-                   for input_loc in self.input_locations):
+        if any(input_loc != MemoryType.FAST
+               for input_loc in self.input_locations):
+            return False
+        if any(pass_grad_loc != MemoryType.FAST
+               for pass_grad_loc in self.pass_grad_locations):
+            return False
+        for channel_id in channel_ids:
+            if self.grad_locations[channel_id] != MemoryType.FAST \
+                    or self.param_locations[channel_id] != MemoryType.FAST:
                 return False
+
+        for succ_op in self.succ_ops:
+            # NOTE: when an operator has multiple successors,
+            #   the output is copied to each successor
             for channel_id in channel_ids:
-                # NOTE: when an operator has multiple successors,
-                #   the output is copied to each successor
                 if not succ_op.isBackwardDone() \
-                        or succ_op.pass_grad_locations[channel_id] == MemoryType.SLOW \
-                        or self.param_locations[channel_id] == MemoryType.SLOW \
-                        or self.grad_locations[channel_id] == MemoryType.SLOW:
+                    or succ_op.pass_grad_locations[
+                        channel_id] != MemoryType.FAST:
                     return False
+
         return True
 
     def forward(self, channel_ids) -> Tuple[float, float]:
-        assert self.canForward(channel_ids), \
-            "file: {}, line: {}".format(
-                __file__, getframeinfo(currentframe()).lineno)
+        printError(not self.canForward(channel_ids))
         r = self.num_input_channels / len(channel_ids)
         memory_peek = r * self.forward_memory_peek
         time_elapsed = r * self.forward_time_elapsed
-        # TODO: change param_location to num_output_channels after forward
+        self.last_stats = (memory_peek, len(channel_ids), "forward")
         return memory_peek, time_elapsed
 
     def backward(self, channel_ids) -> Tuple[float, float]:
-        assert self.canBackward(channel_ids), \
-            "file: {}, line: {}".format(
-                __file__, getframeinfo(currentframe()).lineno)
+        printError(not self.isForwardDone())
+        printError(not self.canBackward(channel_ids))
         r = self.num_output_channels / len(channel_ids)
         memory_peek = r * self.backward_memory_peek
         time_elapsed = r * self.backward_time_elapsed
-        # TODO: self.optimize_time_elapsed
+        self.last_stats = (memory_peek, len(channel_ids), "backward")
         return memory_peek, time_elapsed
 
-    def load(self, memory_type: str, channel_ids, bandwidth) -> Tuple[float, float]:
-        assert memory_type in ["param", "input", "output", "grad", "pass_grad"], \
-            "file: {}, line: {}".format(
-                __file__, getframeinfo(currentframe()).lineno)
+    def memoryOp(self, memory_type: str, channel_ids: List[int],
+                 prev_type, new_type, bandwidth=0.1) -> Tuple[float, float]:
+        printError(memory_type not in
+                   ["param", "input", "output", "grad", "pass_grad"])
         memory_block = getattr(self, memory_type + "_locations")
-        r = len(channel_ids) / len(memory_block)
         for channel_id in channel_ids:
-            assert memory_block[channel_id] == MemoryType.SLOW, \
-                "file: {}, line: {}".format(
-                    __file__, getframeinfo(currentframe()).lineno)
-            memory_block[channel_id] = MemoryType.FAST
+            printError(memory_block[channel_id] != prev_type)
+            memory_block[channel_id] = new_type
+        r = len(channel_ids) / len(memory_block)
         memory_delta = r * getattr(self, memory_type + '_size')
         time_elapsed = memory_delta / bandwidth
         return memory_delta, time_elapsed
+
+    def load(self, memory_type: str, channel_ids, bandwidth) -> Tuple[float, float]:
+        return self.memoryOp(memory_type, channel_ids,
+                             MemoryType.SLOW, MemoryType.FAST, bandwidth)
 
     def store(self, memory_type: str, channel_ids, bandwidth) -> Tuple[float, float]:
-        assert memory_type in ["param", "input", "output", "grad", "pass_grad"], \
-            "file: {}, line: {}".format(
-                __file__, getframeinfo(currentframe()).lineno)
-        memory_block = getattr(self, memory_type + "_locations")
-        r = len(channel_ids) / len(memory_block)
+        return self.memoryOp(memory_type, channel_ids,
+                             MemoryType.FAST, MemoryType.SLOW, bandwidth)
+
+    def allocate(self, memory_type: str, channel_ids) -> float:
+        return self.memoryOp(memory_type, channel_ids,
+                             MemoryType.NONE, MemoryType.FAST)[0]
+
+    def purge(self,  memory_type: str, channel_ids) -> float:
+        # NOTE: HACK: this is generated by the simulator
+        #   thus, no need to check the correctness here
+        return self.memoryOp(memory_type, channel_ids,
+                             MemoryType.FAST, MemoryType.NONE)[0]
+
+    def canOptimize(self, channel_ids) -> bool:
         for channel_id in channel_ids:
-            assert memory_block[channel_id] == MemoryType.FAST, \
-                "file: {}, line: {}".format(
-                    __file__, getframeinfo(currentframe()).lineno)
-            memory_block[channel_id] = MemoryType.SLOW
-        memory_delta = r * getattr(self, memory_type + '_size')
-        time_elapsed = memory_delta / bandwidth
-        return memory_delta, time_elapsed
+            if self.param_locations[channel_id] != MemoryType.FAST \
+                    or self.grad_locations[channel_id] != MemoryType.FAST:
+                return False
+        return True
 
+    def optimize(self, channel_ids) -> float:
+        # NOTE: W' = W - lr * dW, DO NOT require extra memory
+        printError(not self.isForwardDone())
+        printError(not self.isBackwardDone())
+        printError(not self.canOptimize(channel_ids))
+        r = self.num_output_channels / len(channel_ids)
+        time_elapsed = r * self.optimize_time_elapsed
+        self.last_stats = (0, len(channel_ids), "optimize")
+        return time_elapsed
 
-@dataclasses.dataclass
-class RunTime:
-    # machine related
-    # NOTE: there exists two levels of hierarchical memory
-    memory: float
-    cross_level_bandwidth_read: float
-    cross_level_bandwidth_write: float
+    def prune(self, channel_ids) -> None:
+        self.pruned_output_channels |= set(channel_ids)
 
-    # TODO: accuracy related
-    # target_accuracy: float
+    def commit(self, is_last=False) -> float:
+        # NOTE: HACK: this is generated by the simulator
+        #   thus, no need to check the correctness here
+        delta_memory, delta_count, action_name = self.last_stats
+        if action_name == "forward":
+            self.forward_count += delta_count
+            if is_last:
+                # HACK: change param_location to
+                #   num_output_channels when last forward is done
+                memory_type = MemoryType.FAST \
+                    if all(param_loc == MemoryType.FAST
+                           for param_loc in self.param_locations) \
+                    else MemoryType.SLOW
+                self.param_locations = [
+                    memory_type for _ in range(self.num_output_channels)]
+        elif action_name == "backward":
+            self.backward_count += delta_count
+        elif action_name == "optimize":
+            self.optimize_count += delta_count
+        return delta_memory
