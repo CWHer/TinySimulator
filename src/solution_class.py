@@ -1,6 +1,6 @@
 import dataclasses
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
 from component_class import Operator
 
@@ -29,11 +29,11 @@ class Decision:
     wall_time: float  # when this decision would happen
     decision_phase: DecisionPhase
     decision_type: DecisionType
-    memory_block: MemoryBlockType  # which memory block to load/store
+    memory_block: Optional[MemoryBlockType]  # which memory block to load/store
 
     operator: Operator  # apply to which operator
     channel_ids: List[int]  # apply to which channels
     # (num input channels for forward, num output channels for backward)
 
     # TODO: backward pass only
-    pruned_channels: List[int]
+    # pruned_channels: List[int]
