@@ -1,5 +1,5 @@
-from inspect import currentframe, getframeinfo
-from typing import List
+import dataclasses
+from typing import Dict, List, Set, Tuple
 
 import tqdm
 
@@ -212,131 +212,123 @@ class Simulator:
         #   2. simulate all decisions
         # TODO
 
-                if decision.decision_phase == DecisionPhase.FORWARD:
-                    if decision.decision_type == DecisionType.COMPUTE:
-                        assert decision.wall_time >= last_computing, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
-                        memory_peek, time_elapsed = decision.operator.forward(
-                            decision.channel_ids)
-                        last_computing = decision.wall_time + time_elapsed
-                        decision.operator.forward_count += len(
-                            decision.channel_ids)
+        self.memory_peek, current_memory = 0.0, 0.0
+        last_computing, last_loading, last_storing = 0.0, 0.0, 0.0
+        done_flags = {"Forward": False, "Backward": False, "Optimize": False}
 
-                        # TODO: this is not correct
-                        if decision.operator.isForwardDone():
-                            memory_type = MemoryType.SLOW if any(
-                                [param_loc == MemoryType.SLOW
-                                 for param_loc in decision.operator.param_locations]) \
-                                else MemoryType.FAST
-                            decision.operator.param_locations = \
-                                [memory_type for _ in range(
-                                    decision.operator.num_output_channels)]
-                        assert current_memory + memory_peek <= self.run_time.memory, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
-                        # NOTE: no memory resident increase as output tensor is already in memory
+        def checkDone(ops, phase):
+            for op in ops:
+                if not getattr(op, f"is{phase}Done")():
+                    return False
+            return True
 
-                    if decision.decision_type == DecisionType.LOAD:
-                        assert decision.wall_time >= last_loading, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
-                        memory_delta, time_elapsed = \
-                            decision.operator.load(decision.memory_block.value,
-                                                   decision.channel_ids,
-                                                   self.run_time.cross_level_bandwidth_read)
-                        last_loading = decision.wall_time + time_elapsed
-                        current_memory += memory_delta
-                        assert current_memory <= self.run_time.memory, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
+        compute_func = {
+            DecisionType.FORWARD: "forward",
+            DecisionType.BACKWARD: "backward",
+            DecisionType.OPTIMIZE: "optimize"
+        }
+        zero_cost_func = {
+            DecisionType.ALLOCATE,
+            DecisionType.PURGE,
+            DecisionType.PRUNE,
+            DecisionType.COMMIT
+        }
 
-                    if decision.decision_type == DecisionType.STORE:
-                        assert decision.wall_time >= last_storing, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
-                        memory_delta, time_elapsed = \
-                            decision.operator.store(decision.memory_block.value,
-                                                    decision.channel_ids,
-                                                    self.run_time.cross_level_bandwidth_write)
-                        last_storing = decision.wall_time + time_elapsed
-                        current_memory -= memory_delta
-                        assert current_memory >= 0, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
+        num_decision = len(self.solution) + len(self.commit_type) \
+            + sum([len(self.purge_type[t]) for t in self.solution])
+        for _ in tqdm.trange(num_decision, desc="Simulating"):
+            t = self.solution.pop(0)
+            # print("Decision: {}".format(t.decision_type))
 
-                if decision.decision_phase == DecisionPhase.BACKWARD:
-                    if decision.decision_type == DecisionType.COMPUTE:
-                        assert decision.wall_time >= last_computing, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
-                        memory_peek, time_elapsed = decision.operator.backward(
-                            decision.channel_ids)
-                        last_computing = decision.wall_time + time_elapsed
-                        decision.operator.backward_count += len(
-                            decision.channel_ids)
-                        assert current_memory + memory_peek <= self.run_time.memory, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
-                        # NOTE: no memory resident increase as input tensor is already in memory
+            # optional display
+            for phase, done_flag in done_flags.items():
+                if not done_flag and \
+                        checkDone(self.computation_graph, phase):
+                    done_flags[phase] = True
+                    # fmt: off
+                    print("===== {} Done =====".format(phase))
+                    print("Current Time: {:.2f} s".format(last_computing))
+                    print("Current Memory: {:.2f} MB".format(current_memory))
+                    # fmt: on
 
-                    if decision.decision_type == DecisionType.LOAD:
-                        assert decision.wall_time >= last_loading, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
-                        memory_delta, time_elapsed = \
-                            decision.operator.load(decision.memory_block.value,
-                                                   decision.channel_ids,
-                                                   self.run_time.cross_level_bandwidth_read)
-                        last_loading = decision.wall_time + time_elapsed
-                        current_memory += memory_delta
-                        assert current_memory <= self.run_time.memory, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
+            if t.decision_type == DecisionType.LOAD:
+                printError(t.wall_time < last_loading)
+                memory_delta, time_elapsed = \
+                    t.operator.load(t.memory_block.value, t.channel_ids,
+                                    self.run_time.cross_level_bandwidth_read)
+                last_loading = t.wall_time + time_elapsed
+                current_memory += memory_delta
+                printError(current_memory > self.run_time.memory_limit)
 
-                    if decision.decision_type == DecisionType.STORE:
-                        assert decision.wall_time >= last_storing, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
-                        memory_delta, time_elapsed = \
-                            decision.operator.store(decision.memory_block.value,
-                                                    decision.channel_ids,
-                                                    self.run_time.cross_level_bandwidth_write)
-                        last_storing = decision.wall_time + time_elapsed
-                        current_memory -= memory_delta
-                        assert current_memory >= 0, \
-                            "file: {}, line: {}".format(
-                                __file__, getframeinfo(currentframe()).lineno)
+            elif t.decision_type == DecisionType.STORE:
+                printError(t.wall_time < last_storing)
+                memory_delta, time_elapsed = \
+                    t.operator.store(t.memory_block.value, t.channel_ids,
+                                     self.run_time.cross_level_bandwidth_write)
+                last_storing = t.wall_time + time_elapsed
+                current_memory -= memory_delta
+                printError(current_memory < 0)
 
-            assert self.checkBackwardDone(), \
-                "file: {}, line: {}".format(
-                    __file__, getframeinfo(currentframe()).lineno)
-            self.total_time = last_computing
-            self.is_valid = True
+            elif t.decision_type == DecisionType.ALLOCATE:
+                memory_delta = t.operator.allocate(
+                    t.memory_block.value, t.channel_ids)
+                current_memory += memory_delta
+                printError(current_memory > self.run_time.memory_limit)
 
-        except AssertionError as e:
-            print(e)
-            print("===== Invalid Solution =====")
-            self.is_valid = False
+            elif t.decision_type == DecisionType.PURGE:
+                memory_delta = t.operator.purge(
+                    t.memory_block.value, t.channel_ids)
+                current_memory -= memory_delta
+                printError(current_memory < 0)
 
-    def checkForwardDone(self):
-        for op in self.sink_op:
-            if not op.isForwardDone():
-                return False
-        return True
+            elif t.decision_type in compute_func:
+                printError(t.wall_time < last_computing)
+                func_name = compute_func[t.decision_type]
+                memory_delta, time_elapsed = \
+                    getattr(t.operator, func_name)(t.channel_ids)
+                last_computing = t.wall_time + time_elapsed
+                current_memory += memory_delta
+                printError(current_memory > self.run_time.memory_limit)
+                self.solution.append(Decision(
+                    wall_time=last_computing,
+                    decision_type=DecisionType.COMMIT,
+                    operator=t.operator,
+                    memory_block=None,
+                    channel_ids=None,
+                    is_last=self.commit_type[t]
+                ))
+                for op, memory_block, channel_ids in self.purge_type[t]:
+                    self.solution.append(Decision(
+                        wall_time=last_computing,
+                        decision_type=DecisionType.PURGE,
+                        operator=op,
+                        memory_block=memory_block,
+                        channel_ids=channel_ids,
+                        is_last=False
+                    ))
 
-    def checkBackwardDone(self):
-        for op in self.source_op:
-            if not op.isBackwardDone():
-                return False
-        return True
+            elif t.decision_type == DecisionType.COMMIT:
+                delta_memory = t.operator.commit(t.is_last)
+                current_memory -= delta_memory
 
-    def printStats(self):
+            elif t.decision_type == DecisionType.PRUNE:
+                t.operator.prune(t.channel_ids)
+
+            # FIXME: HACK: apparently heap is better
+            self.solution.sort(
+                key=lambda x: x.wall_time * 10
+                + int(x.decision_type in zero_cost_func))
+
+        printError(len(self.solution) != 0)
+        printError(not checkDone(self.computation_graph, "All"))
+        self.total_time = max(last_computing, last_loading, last_storing)
+        print("===== All Done =====")
+        print("Current Time: {:.2f} s".format(self.total_time))
+        print("Current Memory: {:.2f} MB".format(current_memory))
+
+    def getStats(self) -> Tuple[float, float]:
+        return self.total_time, self.memory_peek
+
+    def plotStats(self):
         # TODO
         pass
-
-    def isValid(self):
-        return self.is_valid
-
-    def getTime(self):
-        return self.total_time
