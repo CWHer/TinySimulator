@@ -5,7 +5,8 @@ import tqdm
 
 from operator_class import MemoryType, Operator
 from runtime_class import RunTime
-from solution_class import Decision, DecisionType, MemoryBlockType
+from solution_class import (COMPUTE_DECISIONS, Decision, DecisionType,
+                            MemoryBlockType, decisionRank)
 from utils import printError
 
 
@@ -37,7 +38,7 @@ class Simulator:
         self.run_time = run_time
         self.computation_graph = computation_graph
 
-    def staticProcess(self, solution: List[Decision]):
+    def staticAnalysis(self, solution: List[Decision]):
         # NOTE:
         #   1. find proper sink operators for backward pass
         #   2. sequential issues
@@ -54,10 +55,23 @@ class Simulator:
         #   5. sort decisions by wall_time
         # TODO: prune is not implemented yet
 
+        operators: Set[Operator] = set()
+        for t in solution:
+            # TODO: prune & refer
+            printError(t.decision_type in
+                       [DecisionType.COMMIT, DecisionType.PURGE,
+                        DecisionType.PRUNE, DecisionType.REFER])
+            operators.add(t.operator)
+        printError(operators != set(self.computation_graph))
+
+        # Pass 2
+        # HACK: last forward: [t, t + 10]
+        #       last backward: [t + 5, t + 15]
+        #   this issue is left for runtime check
         @dataclasses.dataclass
         class Interval:
-            start: float = 1e100
-            end: float = -1e100
+            start: float = float("inf")
+            end: float = float("-inf")
 
             def update(self, t: float):
                 self.start = min(self.start, t)
@@ -73,8 +87,21 @@ class Simulator:
             DecisionType.OPTIMIZE: optimize_interval,
             DecisionType.PRUNE: prune_interval
         }
+        for op in operators:
+            for interval in intervals.values():
+                interval[op] = Interval()
 
-        operators: Set[Operator] = set()
+        for t in solution:
+            if t.decision_type in intervals:
+                intervals[t.decision_type][t.operator].update(t.wall_time)
+        for op in operators:
+            # fmt: off
+            printError(forward_interval[op].end > backward_interval[op].start)
+            printError(backward_interval[op].end > optimize_interval[op].start)
+            printError(prune_interval[op].end > backward_interval[op].start)
+            # fmt: on
+
+        # Pass 3
         forward_channels: Dict[Operator, Set[int]] = {}
         backward_channels: Dict[Operator, Set[int]] = {}
         optimize_channels: Dict[Operator, Set[int]] = {}
@@ -85,23 +112,10 @@ class Simulator:
             DecisionType.OPTIMIZE: optimize_channels,
             DecisionType.PRUNE: pruned_channels
         }
-
-        for t in solution:
-            printError(
-                t.decision_type == DecisionType.COMMIT or
-                t.decision_type == DecisionType.PURGE)
-            # TODO
-            printError(t.decision_type == DecisionType.PRUNE)
-            operators.add(t.operator)
-        printError(operators != set(self.computation_graph))
-
         for op in operators:
             for channel in channels.values():
                 channel[op] = set()
-            for interval in intervals.values():
-                interval[op] = Interval()
 
-        # Thing 3
         for t in solution:
             if t.decision_type in channels:
                 channel_ids = set(t.channel_ids)
@@ -116,21 +130,7 @@ class Simulator:
             printError(optimize_channels[op] != backward_channels[op])
             # fmt: on
 
-        # Thing 2
-        # HACK: last forward: [t, t + 10]
-        #       last backward: [t + 5, t + 15]
-        #   this issue is left for runtime check
-        for t in solution:
-            if t.decision_type in intervals:
-                intervals[t.decision_type][t.operator].update(t.wall_time)
-        for op in operators:
-            # fmt: off
-            printError(forward_interval[op].end > backward_interval[op].start)
-            printError(backward_interval[op].end > optimize_interval[op].start)
-            printError(prune_interval[op].end > backward_interval[op].start)
-            # fmt: on
-
-        # Thing 4
+        # Pass 4
         # TODO: prune
         commit_types = {
             DecisionType.FORWARD,
@@ -185,55 +185,46 @@ class Simulator:
                 self.purge_type[t].append(
                     (t.operator, MemoryBlockType.GRAD, t.channel_ids))
 
-        # Thing 1
+        # Pass 1
         self.source_op: List[Operator] = []
         self.sink_op: List[Operator] = []
         for op in self.computation_graph:
-            if len(op.pred_ops) == 0:
+            if not op.pred_ops:
                 self.source_op.append(op)
                 # NOTE: input data are stored in slow memory
                 op.input_locations = \
                     [MemoryType.SLOW] * op.num_input_channels
 
-            def isSink(op: Operator) -> bool:
-                for succ_op in op.succ_ops:
-                    if len(backward_channels[succ_op]) > 0:
-                        return False
-                return True
             # NOTE: if all successors are pruned, then it is a sink operator
-            if isSink(op):
+            if all(not backward_channels[succ_op]
+                   for succ_op in op.succ_ops):
                 self.sink_op.append(op)
 
-        # Thing 5
-        self.solution = sorted(solution, key=lambda x: x.wall_time)
+        # Pass 5
+        self.solution = sorted(solution, key=decisionRank)
 
     def dynamicSim(self):
         # NOTE:
         #   1. generate commit & purge decisions
         #   2. simulate all decisions
-        # TODO
+        # TODO: prune, fix memory type
+        # TODO: log data
 
-        self.memory_peek, current_memory = 0.0, 0.0
-        last_computing, last_loading, last_storing = 0.0, 0.0, 0.0
+        @dataclasses.dataclass
+        class MemoryUsage:
+            wall_time: float
+            memory_usage: float
+        self.memory_usages: List[MemoryUsage] = [MemoryUsage(0, 0)]
+
+        @dataclasses.dataclass
+        class Interval:
+            start: float
+            end: float
+        self.cpu_usages: List[Interval] = [Interval(0, 0)]
+        self.input_device_usages: List[Interval] = [Interval(0, 0)]
+        self.output_device_usages: List[Interval] = [Interval(0, 0)]
+
         done_flags = {"Forward": False, "Backward": False, "Optimize": False}
-
-        def checkDone(ops, phase):
-            for op in ops:
-                if not getattr(op, f"is{phase}Done")():
-                    return False
-            return True
-
-        compute_func = {
-            DecisionType.FORWARD: "forward",
-            DecisionType.BACKWARD: "backward",
-            DecisionType.OPTIMIZE: "optimize"
-        }
-        zero_cost_func = {
-            DecisionType.ALLOCATE,
-            DecisionType.PURGE,
-            DecisionType.PRUNE,
-            DecisionType.COMMIT
-        }
 
         num_decision = len(self.solution) + len(self.commit_type) \
             + sum([len(self.purge_type[t]) for t in self.solution])
@@ -244,54 +235,78 @@ class Simulator:
             # optional display
             for phase, done_flag in done_flags.items():
                 if not done_flag and \
-                        checkDone(self.computation_graph, phase):
+                    all([getattr(op, f"is{phase}Done")()
+                         for op in self.computation_graph]):
                     done_flags[phase] = True
                     # fmt: off
                     print("===== {} Done =====".format(phase))
-                    print("Current Time: {:.2f} s".format(last_computing))
-                    print("Current Memory: {:.2f} MB".format(current_memory))
+                    print("Current Time: {:.2f} ms".format(self.cpu_usages[-1].end))
+                    print("Current Memory: {:.2f} MB".format(self.memory_usages[-1].memory_usage))
                     # fmt: on
 
             if t.decision_type == DecisionType.LOAD:
-                printError(t.wall_time < last_loading)
+                printError(t.wall_time < self.input_device_usages[-1].end)
                 memory_delta, time_elapsed = \
                     t.operator.load(t.memory_block.value, t.channel_ids,
                                     self.run_time.cross_level_bandwidth_read)
-                last_loading = t.wall_time + time_elapsed
-                current_memory += memory_delta
-                printError(current_memory > self.run_time.memory_limit)
+                self.input_device_usages.append(
+                    Interval(t.wall_time, t.wall_time + time_elapsed))
+                memory_usage = memory_delta + \
+                    self.memory_usages[-1].memory_usage
+                self.memory_usages.append(
+                    MemoryUsage(t.wall_time + time_elapsed, memory_usage))
+                printError(memory_usage > self.run_time.memory_limit)
 
             elif t.decision_type == DecisionType.STORE:
-                printError(t.wall_time < last_storing)
+                printError(t.wall_time < self.output_device_usages[-1].end)
                 memory_delta, time_elapsed = \
                     t.operator.store(t.memory_block.value, t.channel_ids,
                                      self.run_time.cross_level_bandwidth_write)
-                last_storing = t.wall_time + time_elapsed
-                current_memory -= memory_delta
-                printError(current_memory < 0)
+                self.output_device_usages.append(
+                    Interval(t.wall_time, t.wall_time + time_elapsed))
+                memory_usage = - memory_delta + \
+                    self.memory_usages[-1].memory_usage
+                self.memory_usages.append(
+                    MemoryUsage(t.wall_time + time_elapsed, memory_usage))
+                printError(memory_usage < 0)
 
             elif t.decision_type == DecisionType.ALLOCATE:
                 memory_delta = t.operator.allocate(
                     t.memory_block.value, t.channel_ids)
-                current_memory += memory_delta
-                printError(current_memory > self.run_time.memory_limit)
+                memory_usage = memory_delta + \
+                    self.memory_usages[-1].memory_usage
+                self.memory_usages.append(
+                    MemoryUsage(t.wall_time, memory_usage))
+                printError(memory_usage > self.run_time.memory_limit)
 
             elif t.decision_type == DecisionType.PURGE:
                 memory_delta = t.operator.purge(
                     t.memory_block.value, t.channel_ids)
-                current_memory -= memory_delta
-                printError(current_memory < 0)
+                memory_usage = - memory_delta + \
+                    self.memory_usages[-1].memory_usage
+                self.memory_usages.append(
+                    MemoryUsage(t.wall_time, memory_usage))
+                printError(memory_usage < 0)
 
-            elif t.decision_type in compute_func:
-                printError(t.wall_time < last_computing)
-                func_name = compute_func[t.decision_type]
+            elif t.decision_type == DecisionType.REFER:
+                # TODO:
+                t.operator.refer(t.memory_block.value, t.channel_ids)
+
+            elif t.decision_type in COMPUTE_DECISIONS:
+                printError(t.wall_time < self.cpu_usages[-1].end)
+                func_name = COMPUTE_DECISIONS[t.decision_type]
                 memory_delta, time_elapsed = \
                     getattr(t.operator, func_name)(t.channel_ids)
-                last_computing = t.wall_time + time_elapsed
-                current_memory += memory_delta
-                printError(current_memory > self.run_time.memory_limit)
+                self.cpu_usages.append(
+                    Interval(t.wall_time, t.wall_time + time_elapsed))
+                memory_usage = memory_delta + \
+                    self.memory_usages[-1].memory_usage
+                self.memory_usages.append(
+                    MemoryUsage(t.wall_time + time_elapsed, memory_usage))
+                printError(memory_usage > self.run_time.memory_limit)
+
                 self.solution.append(Decision(
-                    wall_time=last_computing,
+                    wall_time=t.wall_time + time_elapsed,
                     decision_type=DecisionType.COMMIT,
                     operator=t.operator,
                     memory_block=None,
@@ -300,7 +315,7 @@ class Simulator:
                 ))
                 for op, memory_block, channel_ids in self.purge_type[t]:
                     self.solution.append(Decision(
-                        wall_time=last_computing,
+                        wall_time=t.wall_time + time_elapsed,
                         decision_type=DecisionType.PURGE,
                         operator=op,
                         memory_block=memory_block,
@@ -310,26 +325,64 @@ class Simulator:
 
             elif t.decision_type == DecisionType.COMMIT:
                 delta_memory = t.operator.commit(t.is_last)
-                current_memory -= delta_memory
+                memory_usage = - delta_memory + \
+                    self.memory_usages[-1].memory_usage
+                self.memory_usages.append(
+                    MemoryUsage(t.wall_time, memory_usage))
 
             elif t.decision_type == DecisionType.PRUNE:
                 t.operator.prune(t.channel_ids)
 
+            else:
+                raise NotImplementedError(
+                    "Unknown decision type: {}".format(t.decision_type))
+
             # FIXME: HACK: apparently heap is better
-            self.solution.sort(
-                key=lambda x: x.wall_time * 10
-                + int(x.decision_type in zero_cost_func))
+            self.solution.sort(key=decisionRank)
 
         printError(len(self.solution) != 0)
-        printError(not checkDone(self.computation_graph, "All"))
-        self.total_time = max(last_computing, last_loading, last_storing)
+        printError(not all([getattr(op, f"isAllDone")()
+                            for op in self.computation_graph]))
+        self.total_time = max(
+            [self.cpu_usages[-1].end,
+             self.input_device_usages[-1].end,
+             self.output_device_usages[-1].end]
+        )
         print("===== All Done =====")
-        print("Current Time: {:.2f} s".format(self.total_time))
-        print("Current Memory: {:.2f} MB".format(current_memory))
+        print("Current Time: {:.2f} ms".format(self.total_time))
+        print("Current Memory: {:.2f} MB".format(
+            self.memory_usages[-1].memory_usage))
 
     def getStats(self) -> Tuple[float, float]:
-        return self.total_time, self.memory_peek
+        memory_peek = max([t.memory_usage for t in self.memory_usages])
+        return self.total_time, memory_peek
 
-    def plotStats(self):
-        # TODO
-        pass
+    def plotTimeline(self):
+        import matplotlib.pyplot as plt
+        plt.figure(figsize=(14, 5))
+
+        plt.subplot(1, 2, 1)
+        plt.plot([t.wall_time for t in self.memory_usages],
+                 [t.memory_usage for t in self.memory_usages],
+                 color="purple", alpha=0.5)
+        plt.plot([t.wall_time for t in self.memory_usages],
+                 [self.run_time.memory_limit] * len(self.memory_usages),
+                 color="red", alpha=0.5)
+        plt.xlabel("Time (ms)")
+        plt.ylabel("Memory (MB)")
+
+        # use Gantt chart for better illustration
+        plt.subplot(1, 2, 2)
+        plt.hlines([0, 1, 2], [0] * 3, [self.total_time] * 3,
+                   linestyles="dashed", color="black", alpha=0.5)
+        for t in self.cpu_usages[1:]:
+            plt.fill_between([t.start, t.end], 0, 1, alpha=0.2, color="red")
+        for t in self.input_device_usages[1:]:
+            plt.fill_between([t.start, t.end], 1, 2, alpha=0.2, color="green")
+        for t in self.output_device_usages[1:]:
+            plt.fill_between([t.start, t.end], 2, 3, alpha=0.2, color="blue")
+        plt.yticks([0.5, 1.5, 2.5], ["CPU", "Input", "Output"])
+        plt.xlabel("Time (ms)")
+        plt.ylabel("Device")
+
+        plt.savefig("timeline.png")
