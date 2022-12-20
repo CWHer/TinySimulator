@@ -3,7 +3,8 @@ from typing import Dict, List, Set, Tuple
 
 import tqdm
 
-from component_class import MemoryType, Operator, RunTime
+from operator_class import MemoryType, Operator
+from runtime_class import RunTime
 from solution_class import Decision, DecisionType, MemoryBlockType
 from utils import printError
 

@@ -288,7 +288,7 @@ class Operator:
                                set([MemoryType.FAST, MemoryType.POINTER]),
                                MemoryType.NONE)[0]
 
-    def refer(self, memory_type: str, channel_ids) -> float:
+    def refer(self, memory_type: str, channel_ids):
         # HACK: the only case is when input(ch) points at (pred_)output(ch)
         printError(memory_type != "input")
         pred_channels = self.__findPredChannels(self.pred_ops, channel_ids)
@@ -296,7 +296,6 @@ class Operator:
             printError(pred_op.output_locations[channel_id] != MemoryType.FAST)
         for channel_id in channel_ids:
             self.input_locations[channel_id] = MemoryType.POINTER
-        return 0
 
     def canOptimize(self, channel_ids) -> Optional[List[MemoryRecord]]:
         args_list = [
