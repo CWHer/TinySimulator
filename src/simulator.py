@@ -45,14 +45,14 @@ class Simulator:
         #       forward decisions happen before backward decisions
         #       optimize decisions happen after backward decisions
         #       prune decisions happens before backward decisions
-        #   3. channel conflict/completeness issues
+        #   2. channel conflict/completeness issues
         #       e.g., multiple forward of same channel in same operator
         #       e.g., not all channels are forwarded
         #   4. generate commit & purge decisions
         #       commit: to simplify simulation,
         #        for each forward/backward/optimize a commit is generated
         #       purge: refer to "when to purge data"
-        #   5. sort decisions by wall_time
+        #   4. sort decisions by wall_time
         # TODO: prune is not implemented yet
 
         operators: Set[Operator] = set()
@@ -64,7 +64,7 @@ class Simulator:
             operators.add(t.operator)
         printError(operators != set(self.computation_graph))
 
-        # Pass 2
+        # Pass 1
         # HACK: last forward: [t, t + 10]
         #       last backward: [t + 5, t + 15]
         #   this issue is left for runtime check
@@ -101,7 +101,7 @@ class Simulator:
             printError(prune_interval[op].end > backward_interval[op].start)
             # fmt: on
 
-        # Pass 3
+        # Pass 2
         forward_channels: Dict[Operator, Set[int]] = {}
         backward_channels: Dict[Operator, Set[int]] = {}
         optimize_channels: Dict[Operator, Set[int]] = {}
@@ -130,7 +130,7 @@ class Simulator:
             printError(optimize_channels[op] != backward_channels[op])
             # fmt: on
 
-        # Pass 4
+        # Pass 3
         # TODO: prune
         commit_types = {
             DecisionType.FORWARD,
@@ -185,22 +185,7 @@ class Simulator:
                 self.purge_type[t].append(
                     (t.operator, MemoryBlockType.GRAD, t.channel_ids))
 
-        # Pass 1
-        self.source_op: List[Operator] = []
-        self.sink_op: List[Operator] = []
-        for op in self.computation_graph:
-            if not op.pred_ops:
-                self.source_op.append(op)
-                # NOTE: input data are stored in slow memory
-                op.input_locations = \
-                    [MemoryType.SLOW] * op.num_input_channels
-
-            # NOTE: if all successors are pruned, then it is a sink operator
-            if all(not backward_channels[succ_op]
-                   for succ_op in op.succ_ops):
-                self.sink_op.append(op)
-
-        # Pass 5
+        # Pass 4
         self.solution = sorted(solution, key=decisionRank)
 
     def dynamicSim(self):

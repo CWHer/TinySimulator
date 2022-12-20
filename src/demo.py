@@ -1,4 +1,5 @@
-from component_class import Operator, RunTime
+from operator_class import Operator
+from runtime_class import RunTime
 from simulator import Simulator
 from solution_class import Decision, DecisionType, MemoryBlockType
 
@@ -41,7 +42,7 @@ if __name__ == "__main__":
 
     computation_graph = [op_A, op_B, op_C, op_D]
 
-    run_time = RunTime(memory_limit=10000,
+    run_time = RunTime(memory_limit=50,
                        cross_level_bandwidth_read=2,
                        cross_level_bandwidth_write=1)
 
@@ -80,7 +81,7 @@ if __name__ == "__main__":
                                 memory_block=memory_blocks[i],
                                 channel_ids=channel_ids_list[i])
             decisions.append(decision)
-            current_wall_time += 50
+            current_wall_time += 10
     # NOTE: backward phase
     #   1. allocate gradient data
     #   2. allocate pass gradient data
@@ -105,13 +106,16 @@ if __name__ == "__main__":
             list(range(op.num_output_channels))
         ]
         for i in range(4):
+            if len(op.pred_ops) == 0 and \
+                    memory_blocks[i] == MemoryBlockType.PASS_GRAD:
+                continue
             decision = Decision(wall_time=current_wall_time,
                                 decision_type=decision_types[i],
                                 operator=op,
                                 memory_block=memory_blocks[i],
                                 channel_ids=channel_ids_list[i])
             decisions.append(decision)
-            current_wall_time += 50
+            current_wall_time += 15
     # NOTE: write back parameters
     for op in reversed(computation_graph):
         decision = Decision(
@@ -121,8 +125,9 @@ if __name__ == "__main__":
             memory_block=MemoryBlockType.PARAM,
             channel_ids=list(range(op.num_output_channels)))
         decisions.append(decision)
-        current_wall_time += 50
+        current_wall_time += 10
 
     simulator = Simulator(run_time, computation_graph)
-    simulator.staticProcess(decisions)
+    simulator.staticAnalysis(decisions)
     simulator.dynamicSim()
+    simulator.plotTimeline()

@@ -204,10 +204,13 @@ class Operator:
     def canBackward(self, channel_ids) -> Optional[List[MemoryRecord]]:
         args_list = [
             (self.input_locations, {MemoryType.FAST}),
-            (self.pass_grad_locations, {MemoryType.FAST}),
             (self.grad_locations, {MemoryType.FAST}, channel_ids),
             (self.param_locations, {MemoryType.FAST}, channel_ids)
         ]
+        # HACK: not need to pass grad if op is source (after pruning)
+        if all(pred_op.isBackwardDone()
+               for pred_op in self.pred_ops):
+            args_list.append((self.pass_grad_locations, {MemoryType.FAST}))
         # fmt: off
         memory_records = [self.__checkMemStat(*args) for args in args_list]
         if None in memory_records: return None
