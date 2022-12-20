@@ -129,9 +129,10 @@ class Operator:
         printError(len(self.pass_grad_locations) != self.num_input_channels)
 
     def isAllDone(self) -> bool:
-        # NOTE: all parameters should be write to slow memory
-        if any(param_loc != MemoryType.SLOW
-               for param_loc in self.param_locations):
+        # NOTE: all parameters should be write to slow memory (if not pruned)
+        if not self.isFullPruned() and \
+            any(param_loc != MemoryType.SLOW
+                for param_loc in self.param_locations):
             return False
         return self.isForwardDone() and \
             self.isBackwardDone() and self.isOptimizeDone()
@@ -146,6 +147,9 @@ class Operator:
     def isOptimizeDone(self) -> bool:
         return self.optimize_count == \
             self.num_output_channels - len(self.pruned_output_channels)
+
+    def isFullPruned(self) -> bool:
+        return len(self.pruned_output_channels) == self.num_output_channels
 
     @staticmethod
     def __checkMemStat(memory_block, memory_type: Set,
@@ -208,8 +212,8 @@ class Operator:
             (self.param_locations, {MemoryType.FAST}, channel_ids)
         ]
         # HACK: not need to pass grad if op is source (after pruning)
-        if all(pred_op.isBackwardDone()
-               for pred_op in self.pred_ops):
+        if not all(pred_op.isFullPruned()
+                   for pred_op in self.pred_ops):
             args_list.append((self.pass_grad_locations, {MemoryType.FAST}))
         # fmt: off
         memory_records = [self.__checkMemStat(*args) for args in args_list]

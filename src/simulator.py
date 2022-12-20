@@ -64,6 +64,12 @@ class Simulator:
             operators.add(t.operator)
         printError(operators != set(self.computation_graph))
 
+        # NOTE: input data are stored in slow memory
+        for op in self.computation_graph:
+            if not op.pred_ops:
+                op.input_locations = \
+                    [MemoryType.SLOW] * op.num_input_channels
+
         # Pass 1
         # HACK: last forward: [t, t + 10]
         #       last backward: [t + 5, t + 15]
@@ -179,6 +185,11 @@ class Simulator:
                     self.purge_type[t].append(
                         (t.operator, MemoryBlockType.INPUT,
                          list(range(t.operator.num_input_channels))))
+                    # NOTE: this is sink op
+                    if not t.operator.succ_ops:
+                        self.purge_type[t].append(
+                            (t.operator, MemoryBlockType.OUTPUT,
+                             list(range(t.operator.num_output_channels))))
             if t.decision_type == DecisionType.OPTIMIZE:
                 for channel_id in t.channel_ids:
                     grad_ref_count[t.operator][channel_id] -= 1
