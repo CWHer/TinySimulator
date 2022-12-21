@@ -204,7 +204,6 @@ class Simulator:
         #   1. generate commit & purge decisions
         #   2. simulate all decisions
         # TODO: prune, fix memory type
-        # TODO: log data
 
         @dataclasses.dataclass
         class MemoryUsage:
@@ -284,9 +283,9 @@ class Simulator:
                     MemoryUsage(t.wall_time, memory_usage))
                 printError(memory_usage < 0)
 
-            elif t.decision_type == DecisionType.REFER:
-                # TODO:
-                t.operator.refer(t.memory_block.value, t.channel_ids)
+            # elif t.decision_type == DecisionType.REFER:
+            #     # FIXME: Not implemented
+            #     t.operator.refer(t.memory_block.value, t.channel_ids)
 
             elif t.decision_type in COMPUTE_DECISIONS:
                 printError(t.wall_time < self.cpu_usages[-1].end)

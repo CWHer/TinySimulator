@@ -9,8 +9,7 @@ class RunTime:
     cross_level_bandwidth_read: float
     cross_level_bandwidth_write: float
 
-    # TODO: prune related
-    # target_accuracy: float
+    target_accuracy: float
 
 
 class MemoryType(Enum):
@@ -22,5 +21,10 @@ class MemoryType(Enum):
     FAST = 1        # in fast memory
     SLOW = 2        # in slow memory
     NONE = 3        # not initialized
-    POINTER = 4     # point at fast memory
+    # HACK: FIXME: for simplicity, POINTER is not implemented
+    #  as far as I'm concerned, the only application scenario is
+    #  to point input(ch) at (pred_)output(ch) (though this is quite important),
+    #  but I DO NOT find a elegant way to implement it 
+    #  (maybe an additional COPY action is required)
+    # POINTER = 4     # point at fast memory
     RUNNING = 5     # occupied by operator
