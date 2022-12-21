@@ -36,33 +36,44 @@ class Simulator:
     def __init__(self, run_time: RunTime,
                  computation_graph: List[Operator]):
         self.run_time = run_time
-        self.computation_graph = computation_graph
+
+        # NOTE: topological sort
+        self.computation_graph: List[Operator] = []
+        pred_count = {op: len(op.pred_ops) for op in computation_graph}
+        queue = [op for op in computation_graph if not op.pred_ops]
+        while len(queue) > 0:
+            op = queue.pop(0)
+            self.computation_graph.append(op)
+            for succ_op in op.succ_ops:
+                pred_count[succ_op] -= 1
+                if pred_count[succ_op] == 0:
+                    queue.append(succ_op)
+        printError(len(self.computation_graph) != len(computation_graph))
 
     def staticAnalysis(self, solution: List[Decision]):
         # NOTE:
-        #   1. find proper sink operators for backward pass
-        #   2. sequential issues
-        #       forward decisions happen before backward decisions
-        #       optimize decisions happen after backward decisions
-        #       prune decisions happens before backward decisions
+        #   1. sequential issues
+        #       for each operator, computing is in order,
+        #       forward < prune < backward < optimize
         #   2. channel conflict/completeness issues
         #       e.g., multiple forward of same channel in same operator
         #       e.g., not all channels are forwarded
-        #   4. generate commit & purge decisions
+        #       e.g., backward of pruned channels
+        #       e.g., backward of unreachable operators
+        #       e.g., FIXME: invalid MemoryType.POINTER (x)
+        #   3. generate commit & purge decisions
         #       commit: to simplify simulation,
         #        for each forward/backward/optimize a commit is generated
         #       purge: refer to "when to purge data"
         #   4. sort decisions by wall_time
-        # TODO: prune is not implemented yet
 
         operators: Set[Operator] = set()
         for t in solution:
-            # TODO: prune & refer
             printError(t.decision_type in
-                       [DecisionType.COMMIT, DecisionType.PURGE,
-                        DecisionType.PRUNE, DecisionType.REFER])
+                       [DecisionType.COMMIT, DecisionType.PURGE])
             operators.add(t.operator)
         printError(operators != set(self.computation_graph))
+        del operators
 
         # NOTE: input data are stored in slow memory
         for op in self.computation_graph:
@@ -93,18 +104,18 @@ class Simulator:
             DecisionType.OPTIMIZE: optimize_interval,
             DecisionType.PRUNE: prune_interval
         }
-        for op in operators:
+        for op in self.computation_graph:
             for interval in intervals.values():
                 interval[op] = Interval()
 
         for t in solution:
             if t.decision_type in intervals:
                 intervals[t.decision_type][t.operator].update(t.wall_time)
-        for op in operators:
+        for op in self.computation_graph:
             # fmt: off
-            printError(forward_interval[op].end > backward_interval[op].start)
-            printError(backward_interval[op].end > optimize_interval[op].start)
-            printError(prune_interval[op].end > backward_interval[op].start)
+            printError(not forward_interval[op].end < prune_interval[op].start)
+            printError(not prune_interval[op].end < backward_interval[op].start)
+            printError(not backward_interval[op].end < optimize_interval[op].start)
             # fmt: on
 
         # Pass 2
@@ -118,7 +129,7 @@ class Simulator:
             DecisionType.OPTIMIZE: optimize_channels,
             DecisionType.PRUNE: pruned_channels
         }
-        for op in operators:
+        for op in self.computation_graph:
             for channel in channels.values():
                 channel[op] = set()
 
@@ -128,7 +139,7 @@ class Simulator:
                 type_channels = channels[t.decision_type]
                 printError(len(channel_ids & type_channels[t.operator]) > 0)
                 type_channels[t.operator].update(t.channel_ids)
-        for op in operators:
+        for op in self.computation_graph:
             # fmt: off
             printError(forward_channels[op] != set(range(op.num_input_channels)))
             printError(not pruned_channels[op].issubset(set(range(op.num_output_channels))))
@@ -136,51 +147,73 @@ class Simulator:
             printError(optimize_channels[op] != backward_channels[op])
             # fmt: on
 
+        # NOTE: check target accuracy
+        total_accuracy_loss = 0.0
+        reachable_ops = [op for op in self.computation_graph
+                         if not op.succ_ops and len(backward_channels[op]) > 0]
+        for op in reversed(self.computation_graph):
+            if len(op.succ_ops) > 0 and \
+                len(backward_channels[op]) > 0 and \
+                    any(succ_op in reachable_ops
+                        for succ_op in op.succ_ops):
+                reachable_ops.append(op)
+        for op in self.computation_graph:
+            if not op in reachable_ops:
+                # backward of unreachable operators
+                printError(len(backward_channels[op]) > 0)
+                total_accuracy_loss += sum(op.output_channel_accuracy)
+            else:
+                total_accuracy_loss += sum(
+                    op.output_channel_accuracy[channel_id]
+                    for channel_id in pruned_channels[op])
+        print("Accuracy after pruning: {:.2f}%".format(
+            100 * (1 - total_accuracy_loss)))
+        printError(1 - total_accuracy_loss
+                   < self.run_time.target_accuracy)
+
         # Pass 3
-        # TODO: prune
-        commit_types = {
-            DecisionType.FORWARD,
-            DecisionType.BACKWARD,
-            DecisionType.OPTIMIZE
-        }
         # is_last_[type]_commit
         self.commit_type: Dict[Decision, bool] = {}
+        for t in solution:
+            if t.decision_type in COMPUTE_DECISIONS:
+                self.commit_type[t] = t.wall_time == \
+                    intervals[t.decision_type][t.operator].end
+
         # (which_operator, memory_block ,chanel_ids)
         self.purge_type: Dict[Decision, List[
             Tuple[Operator, MemoryBlockType, List[int]]]] = {}
-        for t in solution:
-            if t.decision_type in commit_types:
-                self.commit_type[t] = t.wall_time == \
-                    intervals[t.decision_type][t.operator].end
-        # HACK: reference counting (per memory type per channel)
-        output_ref_count: Dict[Operator, List[int]] = {}
-        grad_ref_count: Dict[Operator, List[int]] = {}
-        pass_grad_ref_count: Dict[Operator, List[int]] = {}
-        for op in operators:
-            # fmt: off
-            output_ref_count[op] = [len(op.succ_ops)] * op.num_output_channels
-            grad_ref_count[op] = [1] * op.num_output_channels
-            pass_grad_ref_count[op] = [len(op.pred_ops)] * op.num_input_channels
-            # fmt: on
-        # TODO: FIXME: sink and source ops
+        # HACK: usage counting (purge memory block when no more usage)
+        #  however, this technic can't detect useless memory allocated by user
+        output_usage_count: Dict[Operator, int] = {}
+        # output_ref_count: Dict[Operator, List[int]] = {} # FIXME: for POINTER
+        for op in self.computation_graph:
+            output_usage_count[op] = len(op.succ_ops)
+            # output_ref_count[op] = [0] * op.num_output_channels
+
         for t in solution:
             self.purge_type[t] = []
             if t.decision_type == DecisionType.FORWARD:
                 for op in t.operator.pred_ops:
-                    for channel_id in range(op.num_output_channels):
-                        output_ref_count[op][channel_id] -= 1
-                    if output_ref_count[op][0] == 0:
+                    output_usage_count[op] -= 1
+                    if output_usage_count[op] == 0:
                         self.purge_type[t].append(
                             (op, MemoryBlockType.OUTPUT,
                              list(range(op.num_output_channels))))
-            if t.decision_type == DecisionType.BACKWARD:
-                for op in t.operator.succ_ops:
-                    for channel_id in range(op.num_input_channels):
-                        pass_grad_ref_count[op][channel_id] -= 1
-                    if pass_grad_ref_count[op][0] == 0:
+                if t.wall_time == forward_interval[t.operator].end:
+                    self.purge_type[t].append(
+                        (t.operator, MemoryBlockType.PARAM,
+                         list(pruned_channels[t.operator])))
+                    if t.operator not in reachable_ops:
                         self.purge_type[t].append(
-                            (op, MemoryBlockType.PASS_GRAD,
-                             list(range(op.num_input_channels))))
+                            (t.operator, MemoryBlockType.INPUT,
+                             list(range(t.operator.num_input_channels))))
+            elif t.decision_type == DecisionType.BACKWARD:
+                # NOTE: the input is concatenated from each predecessor
+                for op in t.operator.succ_ops:
+                    op_offset = Operator.calcOffset(t.operator, op)
+                    self.purge_type[t].append(
+                        (op, MemoryBlockType.PASS_GRAD,
+                         [op_offset + channel_id for channel_id in t.channel_ids]))
                 if t.wall_time == backward_interval[t.operator].end:
                     self.purge_type[t].append(
                         (t.operator, MemoryBlockType.INPUT,
@@ -190,9 +223,7 @@ class Simulator:
                         self.purge_type[t].append(
                             (t.operator, MemoryBlockType.OUTPUT,
                              list(range(t.operator.num_output_channels))))
-            if t.decision_type == DecisionType.OPTIMIZE:
-                for channel_id in t.channel_ids:
-                    grad_ref_count[t.operator][channel_id] -= 1
+            elif t.decision_type == DecisionType.OPTIMIZE:
                 self.purge_type[t].append(
                     (t.operator, MemoryBlockType.GRAD, t.channel_ids))
 
@@ -201,9 +232,8 @@ class Simulator:
 
     def dynamicSim(self):
         # NOTE:
-        #   1. generate commit & purge decisions
+        #   1. dynamically issue commit & purge decisions
         #   2. simulate all decisions
-        # TODO: prune, fix memory type
 
         @dataclasses.dataclass
         class MemoryUsage:
@@ -338,6 +368,12 @@ class Simulator:
         printError(len(self.solution) != 0)
         printError(not all([getattr(op, f"isAllDone")()
                             for op in self.computation_graph]))
+        if self.memory_usages[-1].memory_usage != 0:
+            print("This execution plan contains useless memory allocation")
+            for i, op in enumerate(self.computation_graph):
+                print("Operator {}:".format(i))
+                op.printMemory()
+                print()
         self.total_time = max(
             [self.cpu_usages[-1].end,
              self.input_device_usages[-1].end,

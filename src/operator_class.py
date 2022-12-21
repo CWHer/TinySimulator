@@ -12,16 +12,16 @@ class MemoryRecord:
         # NOTE: this is a reference
         self.memory_block = memory_block
         self.channel_ids = []
-        self.memory_type: List[MemoryType] = []
+        self.memory_types: List[MemoryType] = []
 
     def log(self, channel_id):
         self.channel_ids.append(channel_id)
-        self.memory_type.append(
+        self.memory_types.append(
             self.memory_block[channel_id])
 
     def recover(self):
         for channel_id, memory_type in \
-                zip(self.channel_ids, self.memory_type):
+                zip(self.channel_ids, self.memory_types):
             self.memory_block[channel_id] = memory_type
 
     def lock(self):
@@ -70,8 +70,7 @@ class Operator:
     pred_ops: List[Operator] = None
     succ_ops: List[Operator] = None
 
-    # TODO: pruning related
-    # output_channel_accuracy: List[float]  # num output channels
+    output_channel_accuracy: List[float] = None  # num output channels
     pruned_output_channels: Set[int] = None
 
     # memory related
@@ -96,6 +95,9 @@ class Operator:
     #   2. when passing gradient data to all predecessors (pass_grad)
     #   3. when input data is used by gradient computation (input)
     #   4. when optimize is done (grad)
+    #   5. when operator is pruned
+    #       (param) of pruned channels, when forward is done
+    #       all (input), if operator is fully pruned, when forward is done
 
     # forward_count == num_input_channels means forward is done
     forward_count: int = 0
@@ -109,10 +111,12 @@ class Operator:
     def __hash__(self) -> int:
         return id(self)
 
-    def init(self, pred_ops, succ_ops):
+    def init(self, pred_ops, succ_ops,
+             output_channel_accuracy: List[float]):
         self.pred_ops = pred_ops
         self.succ_ops = succ_ops
         self.pruned_output_channels = set()
+        self.output_channel_accuracy = output_channel_accuracy
         self.param_locations = [MemoryType.SLOW] * self.num_input_channels
         self.input_locations = [MemoryType.NONE] * self.num_input_channels
         self.output_locations = [MemoryType.NONE] * self.num_output_channels
@@ -130,10 +134,11 @@ class Operator:
 
     def isAllDone(self) -> bool:
         # NOTE: all parameters should be write to slow memory (if not pruned)
-        if not self.isFullPruned() and \
-            any(param_loc != MemoryType.SLOW
-                for param_loc in self.param_locations):
-            return False
+        # HACK: isBackwardDone() & isOptimizeDone() are compatible with pruning
+        for channel_id in range(self.num_output_channels):
+            if not channel_id in self.pruned_output_channels \
+                    and self.param_locations[channel_id] != MemoryType.SLOW:
+                return False
         return self.isForwardDone() and \
             self.isBackwardDone() and self.isOptimizeDone()
 
@@ -179,8 +184,14 @@ class Operator:
             channel_offset += num_output_channels
         return pred_channels
 
+    @staticmethod
+    def calcOffset(pred_op: Operator, op: Operator) -> int:
+        index = op.pred_ops.index(pred_op)
+        return sum([pred_op.num_output_channels
+                    for pred_op in op.pred_ops[:index]])
+
     def canForward(self, channel_ids) -> Optional[List[MemoryRecord]]:
-        # NOTE: when copy (pred_)output(ch) -> input(ch)
+        # FIXME: when copy (pred_)output(ch) -> input(ch)
         #   indeed we can let input(ch) be a pointer to (pred_)output(ch),
         #   which will not increase the memory usage.
         # fmt: off
@@ -212,10 +223,13 @@ class Operator:
             (self.grad_locations, {MemoryType.FAST}, channel_ids),
             (self.param_locations, {MemoryType.FAST}, channel_ids)
         ]
-        # HACK: not need to pass grad if op is source (after pruning)
-        if not all(pred_op.isFullPruned()
-                   for pred_op in self.pred_ops):
-            args_list.append((self.pass_grad_locations, {MemoryType.FAST}))
+        # HACK: only need to pass grad to not pruned channels
+        pred_channels = self.__findPredChannels(self.pred_ops, channel_ids)
+        not_pruned_channels = [
+            channel_id for channel_id, (pred_op, pred_channel) in zip(channel_ids, pred_channels)
+            if pred_channel not in pred_op.pruned_output_channels]
+        args_list.append((self.pass_grad_locations,
+                          {MemoryType.FAST}, not_pruned_channels))
         # fmt: off
         memory_records = [self.__checkMemStat(*args) for args in args_list]
         if None in memory_records: return None
@@ -238,7 +252,7 @@ class Operator:
     def forward(self, channel_ids) -> Tuple[float, float]:
         memory_records = self.canForward(channel_ids)
         printError(memory_records is None)
-        r = self.num_input_channels / len(channel_ids)
+        r = len(channel_ids) / self.num_input_channels
         memory_delta = r * self.forward_memory_peek
         time_elapsed = r * self.forward_time_elapsed
         for memory_record in memory_records:
@@ -253,7 +267,7 @@ class Operator:
         printError(not self.isForwardDone())
         memory_records = self.canBackward(channel_ids)
         printError(memory_records is None)
-        r = self.num_output_channels / len(channel_ids)
+        r = len(channel_ids) / self.num_output_channels
         memory_delta = r * self.backward_memory_peek
         time_elapsed = r * self.backward_time_elapsed
         for memory_record in memory_records:
@@ -263,6 +277,13 @@ class Operator:
                                       delta_memory=memory_delta,
                                       delta_count=len(channel_ids))
         return memory_delta, time_elapsed
+
+    def printMemory(self):
+        memory_types = ["param", "input",
+                        "output", "grad", "pass_grad"]
+        for memory_type in memory_types:
+            memory_block = getattr(self, memory_type + "_locations")
+            print(memory_type, memory_block)
 
     def __memoryOp(self, memory_type: str, channel_ids: List[int],
                    prev_type: Set, new_type: MemoryType, bandwidth=0.1) -> Tuple[float, float]:
@@ -323,7 +344,7 @@ class Operator:
         printError(not self.isBackwardDone())
         memory_records = self.canOptimize(channel_ids)
         printError(memory_records is None)
-        r = self.num_output_channels / len(channel_ids)
+        r = len(channel_ids) / self.num_output_channels
         time_elapsed = r * self.optimize_time_elapsed
         for memory_record in memory_records:
             memory_record.lock()
@@ -334,6 +355,8 @@ class Operator:
         return 0, time_elapsed
 
     def prune(self, channel_ids) -> None:
+        # NOTE: CAN NOT prune forwarding channels
+        printError(not self.isForwardDone())
         self.pruned_output_channels |= set(channel_ids)
 
     def commit(self, is_last=False) -> float:
