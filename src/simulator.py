@@ -370,8 +370,8 @@ class Simulator:
                             for op in self.computation_graph]))
         if self.memory_usages[-1].memory_usage != 0:
             print("This execution plan contains useless memory allocation")
-            for i, op in enumerate(self.computation_graph):
-                print("Operator {}:".format(i))
+            for op in self.computation_graph:
+                print("Operator:")
                 op.printMemory()
                 print()
         self.total_time = max(
