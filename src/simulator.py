@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import dataclasses
+import itertools
 from typing import Dict, List, Set, Tuple
 
 import tqdm
@@ -236,10 +239,17 @@ class Simulator:
         #   2. simulate all decisions
 
         @dataclasses.dataclass
-        class MemoryUsage:
+        class MemoryDelta:
             wall_time: float
-            memory_usage: float
-        self.memory_usages: List[MemoryUsage] = [MemoryUsage(0, 0)]
+            memory_delta: float
+
+            def __lt__(self, other: MemoryDelta):
+                return self.memory_delta < other.memory_delta \
+                    if self.wall_time == other.wall_time \
+                    else self.wall_time < other.wall_time
+
+        current_memory = 0
+        self.memory_deltas: List[MemoryDelta] = []
 
         @dataclasses.dataclass
         class Interval:
@@ -266,7 +276,7 @@ class Simulator:
                     # fmt: off
                     print("===== {} Done =====".format(phase))
                     print("Current Time: {:.2f} ms".format(self.cpu_usages[-1].end))
-                    print("Current Memory: {:.2f} MB".format(self.memory_usages[-1].memory_usage))
+                    print("Current Memory: {:.2f} MB".format(current_memory))
                     # fmt: on
 
             if t.decision_type == DecisionType.LOAD:
@@ -276,11 +286,10 @@ class Simulator:
                                     self.run_time.cross_level_bandwidth_read)
                 self.input_device_usages.append(
                     Interval(t.wall_time, t.wall_time + time_elapsed))
-                memory_usage = memory_delta + \
-                    self.memory_usages[-1].memory_usage
-                self.memory_usages.append(
-                    MemoryUsage(t.wall_time + time_elapsed, memory_usage))
-                printError(memory_usage > self.run_time.memory_limit)
+                current_memory += memory_delta
+                self.memory_deltas.append(
+                    MemoryDelta(t.wall_time, memory_delta))
+                printError(current_memory > self.run_time.memory_limit)
 
             elif t.decision_type == DecisionType.STORE:
                 printError(t.wall_time < self.output_device_usages[-1].end)
@@ -289,29 +298,26 @@ class Simulator:
                                      self.run_time.cross_level_bandwidth_write)
                 self.output_device_usages.append(
                     Interval(t.wall_time, t.wall_time + time_elapsed))
-                memory_usage = - memory_delta + \
-                    self.memory_usages[-1].memory_usage
-                self.memory_usages.append(
-                    MemoryUsage(t.wall_time + time_elapsed, memory_usage))
-                printError(memory_usage < 0)
+                current_memory -= memory_delta
+                self.memory_deltas.append(
+                    MemoryDelta(t.wall_time, -memory_delta))
+                printError(current_memory < 0)
 
             elif t.decision_type == DecisionType.ALLOCATE:
                 memory_delta = t.operator.allocate(
                     t.memory_block.value, t.channel_ids)
-                memory_usage = memory_delta + \
-                    self.memory_usages[-1].memory_usage
-                self.memory_usages.append(
-                    MemoryUsage(t.wall_time, memory_usage))
-                printError(memory_usage > self.run_time.memory_limit)
+                current_memory += memory_delta
+                self.memory_deltas.append(
+                    MemoryDelta(t.wall_time, memory_delta))
+                printError(current_memory > self.run_time.memory_limit)
 
             elif t.decision_type == DecisionType.PURGE:
                 memory_delta = t.operator.purge(
                     t.memory_block.value, t.channel_ids)
-                memory_usage = - memory_delta + \
-                    self.memory_usages[-1].memory_usage
-                self.memory_usages.append(
-                    MemoryUsage(t.wall_time, memory_usage))
-                printError(memory_usage < 0)
+                current_memory -= memory_delta
+                self.memory_deltas.append(
+                    MemoryDelta(t.wall_time, -memory_delta))
+                printError(current_memory < 0)
 
             # elif t.decision_type == DecisionType.REFER:
             #     # FIXME: Not implemented
@@ -324,11 +330,10 @@ class Simulator:
                     getattr(t.operator, func_name)(t.channel_ids)
                 self.cpu_usages.append(
                     Interval(t.wall_time, t.wall_time + time_elapsed))
-                memory_usage = memory_delta + \
-                    self.memory_usages[-1].memory_usage
-                self.memory_usages.append(
-                    MemoryUsage(t.wall_time + time_elapsed, memory_usage))
-                printError(memory_usage > self.run_time.memory_limit)
+                current_memory += memory_delta
+                self.memory_deltas.append(
+                    MemoryDelta(t.wall_time, memory_delta))
+                printError(current_memory > self.run_time.memory_limit)
 
                 self.solution.append(Decision(
                     wall_time=t.wall_time + time_elapsed,
@@ -349,11 +354,11 @@ class Simulator:
                     ))
 
             elif t.decision_type == DecisionType.COMMIT:
-                delta_memory = t.operator.commit(t.is_last)
-                memory_usage = - delta_memory + \
-                    self.memory_usages[-1].memory_usage
-                self.memory_usages.append(
-                    MemoryUsage(t.wall_time, memory_usage))
+                memory_delta = t.operator.commit(t.is_last)
+                current_memory -= memory_delta
+                self.memory_deltas.append(
+                    MemoryDelta(t.wall_time, -memory_delta))
+                printError(current_memory < 0)
 
             elif t.decision_type == DecisionType.PRUNE:
                 t.operator.prune(t.channel_ids)
@@ -368,7 +373,11 @@ class Simulator:
         printError(len(self.solution) != 0)
         printError(not all([getattr(op, f"isAllDone")()
                             for op in self.computation_graph]))
-        if self.memory_usages[-1].memory_usage != 0:
+        printError(not all([self.memory_deltas[i].wall_time
+                            <= self.memory_deltas[i + 1].wall_time
+                            for i in range(len(self.memory_deltas) - 1)]))
+        self.memory_deltas.sort()
+        if current_memory != 0:
             print("This execution plan contains useless memory allocation")
             for op in self.computation_graph:
                 print("Operator:")
@@ -381,23 +390,36 @@ class Simulator:
         )
         print("===== All Done =====")
         print("Current Time: {:.2f} ms".format(self.total_time))
-        print("Current Memory: {:.2f} MB".format(
-            self.memory_usages[-1].memory_usage))
+        print("Current Memory: {:.2f} MB".format(current_memory))
 
     def getStats(self) -> Tuple[float, float]:
-        memory_peek = max([t.memory_usage for t in self.memory_usages])
-        return self.total_time, memory_peek
+        memory_usages = itertools.accumulate(
+            [t.memory_delta for t in self.memory_deltas])
+        return self.total_time, max(memory_usages)
 
     def plotTimeline(self):
         import matplotlib.pyplot as plt
         plt.figure(figsize=(14, 5))
 
         plt.subplot(1, 2, 1)
-        plt.plot([t.wall_time for t in self.memory_usages],
-                 [t.memory_usage for t in self.memory_usages],
+
+        @dataclasses.dataclass
+        class MemoryUsage:
+            wall_time: float
+            memory_usage: float
+        memory_usages: List[MemoryUsage] = [MemoryUsage(0, 0)]
+        for t in self.memory_deltas:
+            if t.wall_time != memory_usages[-1].wall_time:
+                memory_usages.append(MemoryUsage(
+                    t.wall_time, memory_usages[-1].memory_usage))
+            memory_usages.append(MemoryUsage(
+                t.wall_time, memory_usages[-1].memory_usage + t.memory_delta))
+
+        plt.plot([t.wall_time for t in memory_usages],
+                 [t.memory_usage for t in memory_usages],
                  color="purple", alpha=0.5)
-        plt.plot([t.wall_time for t in self.memory_usages],
-                 [self.run_time.memory_limit] * len(self.memory_usages),
+        plt.plot([t.wall_time for t in memory_usages],
+                 [self.run_time.memory_limit] * len(memory_usages),
                  color="red", alpha=0.5)
         plt.xlabel("Time (ms)")
         plt.ylabel("Memory (MB)")
