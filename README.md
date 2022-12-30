@@ -14,13 +14,17 @@ In the following section, we briefly describe some important classes.
 
 ### Operator
 
+There are two kinds of relations between channels, `AllToAll` (e.g., linear) and `OneToOne` (e.g., batch norm).
+
 - Forward phase
 
   $$
   X^\prime = f(w,X)
   $$
 
-  `(pred_)output(ch) + param(in_ch) -> output(all)`
+  - All-to-all: `(pred_)output(ch) + param(in_ch) -> output(all)`
+
+  - One-to-one: `(pred_)output(ch) + param(in_ch) -> output(ch)`
 
   `(pred_)output(ch) -> input(ch)`
 
@@ -31,9 +35,17 @@ In the following section, we briefly describe some important classes.
   \frac{\partial l}{\partial X} = \frac{\partial l}{\partial X^\prime} \times \frac{\partial f}{\partial X}
   $$
 
-  `(succ_)pass_grad(ch) + input(all) -> grad(ch)`
+  - All-to-all
 
-  `(succ_)pass_grad(ch) + param(out_ch) -> pass_grad(all)`
+    `(succ_)pass_grad(ch) + input(all) -> grad(ch)`
+
+    `(succ_)pass_grad(ch) + param(out_ch) -> pass_grad(all)`
+
+  - One-to-one
+
+    `(succ_)pass_grad(ch) + input(ch) -> grad(ch)`
+
+    `(succ_)pass_grad(ch) + param(out_ch) -> pass_grad(ch)`
 
 - Optimize phase
 
@@ -43,9 +55,9 @@ In the following section, we briefly describe some important classes.
 
 ```python
 class Operator:
-    forward_memory_peek: float     # peek memory usage during forward
+    forward_memory_peek: float     # extra memory usage during forward (i.e., DO NOT include input, param, ...)
     forward_time_elapsed: float    # time elapsed during forward
-    backward_memory_peek: float    # peek memory usage during backward
+    backward_memory_peek: float    # extra memory usage during backward 
     backward_time_elapsed: float   # time elapsed during backward
     optimize_time_elapsed: float   # time elapsed during optimize
 
