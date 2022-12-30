@@ -1,4 +1,4 @@
-from operator_class import Operator
+from operator_class import ChannelType, Operator
 from runtime_class import RunTime
 from simulator import Simulator
 from solution_class import Decision, DecisionType, MemoryBlockType
@@ -15,24 +15,28 @@ if __name__ == "__main__":
                     backward_memory_peek=4, backward_time_elapsed=8,
                     optimize_time_elapsed=8,
                     param_size=4, input_size=2, output_size=2,
+                    channel_type=ChannelType.AllToAll,
                     grad_size=4, pass_grad_size=2,
                     num_input_channels=2, num_output_channels=2)
     op_B = Operator(forward_memory_peek=6, forward_time_elapsed=12,
                     backward_memory_peek=6, backward_time_elapsed=12,
                     optimize_time_elapsed=12,
                     param_size=6, input_size=2, output_size=3,
+                    channel_type=ChannelType.AllToAll,
                     grad_size=6, pass_grad_size=2,
                     num_input_channels=2, num_output_channels=3)
     op_C = Operator(forward_memory_peek=4, forward_time_elapsed=8,
                     backward_memory_peek=4, backward_time_elapsed=8,
                     optimize_time_elapsed=8,
                     param_size=4, input_size=2, output_size=2,
+                    channel_type=ChannelType.OneToOne,
                     grad_size=4, pass_grad_size=2,
                     num_input_channels=2, num_output_channels=2)
     op_D = Operator(forward_memory_peek=5, forward_time_elapsed=10,
                     backward_memory_peek=5, backward_time_elapsed=10,
                     optimize_time_elapsed=10,
                     param_size=5, input_size=5, output_size=1,
+                    channel_type=ChannelType.AllToAll,
                     grad_size=5, pass_grad_size=5,
                     num_input_channels=5, num_output_channels=1)
     op_A.init(pred_ops=[], succ_ops=[op_B, op_C],

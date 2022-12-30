@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+from enum import Enum
 from typing import List, Optional, Set, Tuple
 
 from runtime_class import MemoryType
@@ -43,6 +44,12 @@ class CommitInfo:
         self.delta_count = delta_count
 
 
+class ChannelType(Enum):
+    # the relationship between output channels and input channels
+    AllToAll = 1      # e.g., linear
+    OneToOne = 2      # e.g., batch norm
+
+
 @dataclasses.dataclass
 class Operator:
     # computation related
@@ -60,6 +67,7 @@ class Operator:
 
     num_input_channels: int
     num_output_channels: int
+    channel_type: ChannelType
 
     # network topology
     # NOTE:
@@ -76,11 +84,14 @@ class Operator:
     # memory related
     # NOTE:
     #   1. forward: X' = f(w, X)
-    #       (pred_)output(ch) + param(in_ch) -> output(all)
+    #       (pred_)output(ch) + param(in_ch) -> output(all)   # AllToAll
+    #       (pred_)output(ch) + param(in_ch) -> output(ch)    # OneToOne
     #       (pred_)output(ch) -> input(ch)
     #   2. backward: dW = dX' * df/dw, dX = dX' * df/dX
-    #       (succ_)pass_grad(ch) + param(out_ch) -> pass_grad(all)
-    #       (succ_)pass_grad(ch) + input(all) -> grad(ch)
+    #       (succ_)pass_grad(ch) + param(out_ch) -> pass_grad(all)   # AllToAll
+    #       (succ_)pass_grad(ch) + input(all) -> grad(ch)            # AllToAll
+    #       (succ_)pass_grad(ch) + param(out_ch) -> pass_grad(ch)    # OneToOne
+    #       (succ_)pass_grad(ch) + input(ch) -> grad(ch)             # OneToOne
     #   3. optimize: W' = W - lr * dW
     #       param(out_ch) + grad(ch)
 
@@ -124,6 +135,8 @@ class Operator:
         self.pass_grad_locations = [MemoryType.NONE] * self.num_input_channels
 
     def checkNumChannels(self, is_forward: bool):
+        printError(self.channel_type == ChannelType.OneToOne
+                   and self.num_input_channels != self.num_output_channels)
         # assert len(self.output_channel_accuracy) == self.num_output_channels
         printError(len(self.param_locations) != (
             self.num_input_channels if is_forward else self.num_output_channels))
@@ -191,12 +204,14 @@ class Operator:
                     for pred_op in op.pred_ops[:index]])
 
     def canForward(self, channel_ids) -> Optional[List[MemoryRecord]]:
+        self.checkNumChannels(is_forward=True)
         # FIXME: when copy (pred_)output(ch) -> input(ch)
         #   indeed we can let input(ch) be a pointer to (pred_)output(ch),
         #   which will not increase the memory usage.
         # fmt: off
         args_list = [
-            (self.output_locations, {MemoryType.FAST}),
+            (self.output_locations, {MemoryType.FAST},
+             None if self.channel_type == ChannelType.AllToAll else channel_ids),
             (self.param_locations, {MemoryType.FAST}, channel_ids),
             (self.input_locations, {MemoryType.FAST}, channel_ids)
             # (self.input_locations, {MemoryType.FAST, MemoryType.POINTER}, channel_ids)
@@ -218,16 +233,21 @@ class Operator:
         return memory_records
 
     def canBackward(self, channel_ids) -> Optional[List[MemoryRecord]]:
+        self.checkNumChannels(is_forward=False)
         args_list = [
-            (self.input_locations, {MemoryType.FAST}),
+            (self.input_locations, {MemoryType.FAST},
+             None if self.channel_type == ChannelType.AllToAll else channel_ids),
             (self.grad_locations, {MemoryType.FAST}, channel_ids),
             (self.param_locations, {MemoryType.FAST}, channel_ids)
         ]
         # HACK: only need to pass grad to not pruned channels
-        pred_channels = self.__findPredChannels(self.pred_ops, channel_ids)
+        pred_channels = self.__findPredChannels(
+            self.pred_ops, list(range(self.num_input_channels)))
         not_pruned_channels = [
             channel_id for channel_id, (pred_op, pred_channel) in zip(channel_ids, pred_channels)
             if pred_channel not in pred_op.pruned_output_channels]
+        if self.channel_type == ChannelType.OneToOne:
+            not_pruned_channels = set(not_pruned_channels) & set(channel_ids)
         args_list.append((self.pass_grad_locations,
                           {MemoryType.FAST}, not_pruned_channels))
         # fmt: off
@@ -371,7 +391,9 @@ class Operator:
         if action_name == "forward":
             self.forward_count += \
                 self.commit_info.delta_count
-            if is_last:
+            if is_last and \
+                    self.channel_type == ChannelType.AllToAll:
+                # NOTE: Not needed for OneToOne
                 # HACK: repartition param_location to
                 #   num_output_channels when last forward is done
                 memory_type = MemoryType.FAST \
