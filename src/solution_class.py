@@ -62,6 +62,7 @@ class Decision:
 def decisionRank(x: Decision):
     # NOTE: when some decisions have the same wall_time,
     #   we need to compute them in certain order
+    # FIXME: this may cause some bug when wall_time is fractional
     index = len(ZERO_COST_DECISIONS) \
         if not x.decision_type in ZERO_COST_DECISIONS \
         else ZERO_COST_DECISIONS.index(x.decision_type)

@@ -40,6 +40,12 @@ class Simulator:
                  computation_graph: List[Operator]):
         self.run_time = run_time
 
+        # NOTE: check input channel & output channel consistency
+        for op in computation_graph:
+            if len(op.pred_ops) > 0:
+                printError(op.num_input_channels != sum(
+                    [pred_op.num_output_channels for pred_op in op.pred_ops]))
+
         # NOTE: topological sort
         self.computation_graph: List[Operator] = []
         pred_count = {op: len(op.pred_ops) for op in computation_graph}
