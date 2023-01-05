@@ -10,7 +10,7 @@ from operator_class import MemoryType, Operator
 from runtime_class import RunTime
 from solution_class import (COMPUTE_DECISIONS, Decision, DecisionType,
                             MemoryBlockType, decisionRank)
-from utils import printError
+from utils import printError, printErrorMsg
 
 
 class Simulator:
@@ -43,8 +43,9 @@ class Simulator:
         # NOTE: check input channel & output channel consistency
         for op in computation_graph:
             if len(op.pred_ops) > 0:
-                printError(op.num_input_channels != sum(
-                    [pred_op.num_output_channels for pred_op in op.pred_ops]))
+                printErrorMsg(op.num_input_channels != sum(
+                    [pred_op.num_output_channels for pred_op in op.pred_ops]),
+                    "Channel consistency check failed")
 
         # NOTE: topological sort
         self.computation_graph: List[Operator] = []
@@ -57,7 +58,9 @@ class Simulator:
                 pred_count[succ_op] -= 1
                 if pred_count[succ_op] == 0:
                     queue.append(succ_op)
-        printError(len(self.computation_graph) != len(computation_graph))
+        printErrorMsg(
+            len(self.computation_graph) != len(computation_graph),
+            "Topological sort failed")
 
     def staticAnalysis(self, solution: List[Decision]):
         # NOTE:
@@ -81,7 +84,9 @@ class Simulator:
             printError(t.decision_type in
                        [DecisionType.COMMIT, DecisionType.PURGE])
             operators.add(t.operator)
-        printError(operators != set(self.computation_graph))
+        printErrorMsg(
+            operators != set(self.computation_graph),
+            "Redundant operators detected")
         del operators
 
         # NOTE: input data are stored in slow memory
@@ -146,7 +151,9 @@ class Simulator:
             if t.decision_type in channels:
                 channel_ids = set(t.channel_ids)
                 type_channels = channels[t.decision_type]
-                printError(len(channel_ids & type_channels[t.operator]) > 0)
+                printErrorMsg(
+                    len(channel_ids & type_channels[t.operator]) > 0,
+                    "Decisions on same channel detected")
                 type_channels[t.operator].update(t.channel_ids)
         for op in self.computation_graph:
             # fmt: off
@@ -168,8 +175,8 @@ class Simulator:
                 reachable_ops.append(op)
         for op in self.computation_graph:
             if not op in reachable_ops:
-                # backward of unreachable operators
-                printError(len(backward_channels[op]) > 0)
+                printErrorMsg(len(backward_channels[op]) > 0,
+                              "Backward of unreachable operators")
                 total_accuracy_loss += sum(op.output_channel_accuracy)
             else:
                 total_accuracy_loss += sum(
@@ -177,8 +184,9 @@ class Simulator:
                     for channel_id in pruned_channels[op])
         print("Accuracy after pruning: {:.2f}%".format(
             100 * (1 - total_accuracy_loss)))
-        printError(1 - total_accuracy_loss
-                   < self.run_time.target_accuracy)
+        printErrorMsg(
+            1 - total_accuracy_loss < self.run_time.target_accuracy,
+            "Target accuracy not reached")
 
         # Pass 3
         # is_last_[type]_commit
@@ -286,7 +294,9 @@ class Simulator:
                     # fmt: on
 
             if t.decision_type == DecisionType.LOAD:
-                printError(t.wall_time < self.input_device_usages[-1].end)
+                printErrorMsg(
+                    t.wall_time < self.input_device_usages[-1].end,
+                    "Input device is busy")
                 memory_delta, time_elapsed = \
                     t.operator.load(t.memory_block.value, t.channel_ids,
                                     self.run_time.cross_level_bandwidth_read)
@@ -295,10 +305,14 @@ class Simulator:
                 current_memory += memory_delta
                 self.memory_deltas.append(
                     MemoryDelta(t.wall_time, memory_delta))
-                printError(current_memory > self.run_time.memory_limit)
+                printErrorMsg(
+                    current_memory > self.run_time.memory_limit,
+                    "Memory limit exceeded")
 
             elif t.decision_type == DecisionType.STORE:
-                printError(t.wall_time < self.output_device_usages[-1].end)
+                printErrorMsg(
+                    t.wall_time < self.output_device_usages[-1].end,
+                    "Output device is busy")
                 memory_delta, time_elapsed = \
                     t.operator.store(t.memory_block.value, t.channel_ids,
                                      self.run_time.cross_level_bandwidth_write)
@@ -315,7 +329,9 @@ class Simulator:
                 current_memory += memory_delta
                 self.memory_deltas.append(
                     MemoryDelta(t.wall_time, memory_delta))
-                printError(current_memory > self.run_time.memory_limit)
+                printErrorMsg(
+                    current_memory > self.run_time.memory_limit,
+                    "Memory limit exceeded")
 
             elif t.decision_type == DecisionType.PURGE:
                 memory_delta = t.operator.purge(
@@ -330,7 +346,8 @@ class Simulator:
             #     t.operator.refer(t.memory_block.value, t.channel_ids)
 
             elif t.decision_type in COMPUTE_DECISIONS:
-                printError(t.wall_time < self.cpu_usages[-1].end)
+                printErrorMsg(
+                    t.wall_time < self.cpu_usages[-1].end, "CPU is busy")
                 func_name = COMPUTE_DECISIONS[t.decision_type]
                 memory_delta, time_elapsed = \
                     getattr(t.operator, func_name)(t.channel_ids)
@@ -339,7 +356,9 @@ class Simulator:
                 current_memory += memory_delta
                 self.memory_deltas.append(
                     MemoryDelta(t.wall_time, memory_delta))
-                printError(current_memory > self.run_time.memory_limit)
+                printErrorMsg(
+                    current_memory > self.run_time.memory_limit,
+                    "Memory limit exceeded")
 
                 self.solution.append(Decision(
                     wall_time=t.wall_time + time_elapsed,
@@ -377,8 +396,9 @@ class Simulator:
             self.solution.sort(key=decisionRank)
 
         printError(len(self.solution) != 0)
-        printError(not all([getattr(op, f"isAllDone")()
-                            for op in self.computation_graph]))
+        printErrorMsg(not all([getattr(op, f"isAllDone")()
+                               for op in self.computation_graph]),
+                      "Not all operators are done")
         printError(not all([self.memory_deltas[i].wall_time
                             <= self.memory_deltas[i + 1].wall_time
                             for i in range(len(self.memory_deltas) - 1)]))

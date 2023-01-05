@@ -5,7 +5,7 @@ from enum import Enum
 from typing import List, Optional, Set, Tuple
 
 from runtime_class import MemoryType
-from utils import printError
+from utils import printError, printErrorMsg
 
 
 class MemoryRecord:
@@ -271,7 +271,8 @@ class Operator:
 
     def forward(self, channel_ids) -> Tuple[float, float]:
         memory_records = self.canForward(channel_ids)
-        printError(memory_records is None)
+        printErrorMsg(memory_records is None,
+                      "Cannot forward since memory is not ready")
         r = len(channel_ids) / self.num_input_channels
         memory_delta = r * self.forward_memory_peek
         time_elapsed = r * self.forward_time_elapsed
@@ -286,7 +287,8 @@ class Operator:
     def backward(self, channel_ids) -> Tuple[float, float]:
         printError(not self.isForwardDone())
         memory_records = self.canBackward(channel_ids)
-        printError(memory_records is None)
+        printErrorMsg(memory_records is None,
+                      "Cannot backward since memory is not ready")
         r = len(channel_ids) / self.num_output_channels
         memory_delta = r * self.backward_memory_peek
         time_elapsed = r * self.backward_time_elapsed
@@ -363,7 +365,8 @@ class Operator:
         printError(not self.isForwardDone())
         printError(not self.isBackwardDone())
         memory_records = self.canOptimize(channel_ids)
-        printError(memory_records is None)
+        printErrorMsg(memory_records is None,
+                      "Cannot optimize since memory is not ready")
         r = len(channel_ids) / self.num_output_channels
         time_elapsed = r * self.optimize_time_elapsed
         for memory_record in memory_records:
