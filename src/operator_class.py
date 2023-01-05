@@ -241,10 +241,10 @@ class Operator:
             (self.param_locations, {MemoryType.FAST}, channel_ids)
         ]
         # HACK: only need to pass grad to not pruned channels
-        pred_channels = self.__findPredChannels(
-            self.pred_ops, list(range(self.num_input_channels)))
+        input_ids = list(range(self.num_input_channels))
+        pred_channels = self.__findPredChannels(self.pred_ops, input_ids)
         not_pruned_channels = [
-            channel_id for channel_id, (pred_op, pred_channel) in zip(channel_ids, pred_channels)
+            channel_id for channel_id, (pred_op, pred_channel) in zip(input_ids, pred_channels)
             if pred_channel not in pred_op.pruned_output_channels]
         not_pruned_channels = set(not_pruned_channels) & set(pred_channel_ids)
         args_list.append((self.pass_grad_locations,
