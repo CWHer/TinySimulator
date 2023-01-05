@@ -22,9 +22,9 @@ There are two kinds of relations between channels, `AllToAll` (e.g., linear) and
   X^\prime = f(w,X)
   $$
 
-  - All-to-all: `(pred_)output(ch) + param(in_ch) -> output(all)`
+  - All-to-all: `(pred_)output(all) + param(out_ch) -> output(out_ch)`
 
-  - One-to-one: `(pred_)output(ch) + param(in_ch) -> output(ch)`
+  - One-to-one: `(pred_)output(ch) + param(out_ch) -> output(ch)`
 
   `(pred_)output(ch) -> input(ch)`
 
@@ -120,10 +120,6 @@ class Decision:
     # which memory block to load/store/allocate
     memory_block: MemoryBlockType
     channel_ids: List[int]  # apply to which channels
-
-    # NOTE: this is only for commit decision
-    #   is this commit the last commit for forward/backward ?
-    is_last: bool = False
 ```
 
 
@@ -139,7 +135,9 @@ The steps for generating this simple execution plan can be summarized as follows
   1. load/allocate input data (dataset is stored in slow memory)
 
   2. load parameters from slow memory
+
   3. allocate memory for output data
+
   4. execute forward
 
 - Optional: prune some channels
@@ -154,3 +152,12 @@ The steps for generating this simple execution plan can be summarized as follows
 
 - Finally, store all parameters to slow memory
 
+
+
+## TODO
+
+- [ ] Remove explicit issue time of decision and let simulator automatically issue them.
+
+  To achieve this, one possible way is to make decisions connected in a directed acyclic graph. Otherwise, when the simulator statically generates `purge`/`commit` decisions and it may not be able to properly insert them into the current execution plan.  
+
+  Besides, all the statical analyses need to be refactored so they could incorporate with automatic issue mechanism.
