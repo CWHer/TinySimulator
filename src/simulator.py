@@ -75,7 +75,7 @@ class Simulator:
         #       e.g., FIXME: invalid MemoryType.POINTER (x)
         #   3. generate commit & purge decisions
         #       commit: to simplify simulation,
-        #        for each forward/backward/optimize a commit is generated
+        #        for each forward/backward/optimize a commit is generated (x)
         #       purge: refer to "when to purge data"
         #   4. sort decisions by wall_time
 
@@ -157,7 +157,7 @@ class Simulator:
                 type_channels[t.operator].update(t.channel_ids)
         for op in self.computation_graph:
             # fmt: off
-            printError(forward_channels[op] != set(range(op.num_input_channels)))
+            printError(forward_channels[op] != set(range(op.num_output_channels)))
             printError(not pruned_channels[op].issubset(set(range(op.num_output_channels))))
             printError(backward_channels[op] != set(range(op.num_output_channels)) - pruned_channels[op])
             printError(optimize_channels[op] != backward_channels[op])
@@ -189,13 +189,6 @@ class Simulator:
             "Target accuracy not reached")
 
         # Pass 3
-        # is_last_[type]_commit
-        self.commit_type: Dict[Decision, bool] = {}
-        for t in solution:
-            if t.decision_type in COMPUTE_DECISIONS:
-                self.commit_type[t] = t.wall_time == \
-                    intervals[t.decision_type][t.operator].end
-
         # (which_operator, memory_block ,chanel_ids)
         self.purge_type: Dict[Decision, List[
             Tuple[Operator, MemoryBlockType, List[int]]]] = {}
@@ -275,7 +268,10 @@ class Simulator:
 
         done_flags = {"Forward": False, "Backward": False, "Optimize": False}
 
-        num_decision = len(self.solution) + len(self.commit_type) \
+        num_commit = sum(
+            [decision.decision_type in COMPUTE_DECISIONS
+             for decision in self.solution])
+        num_decision = len(self.solution) + num_commit \
             + sum([len(self.purge_type[t]) for t in self.solution])
         for _ in tqdm.trange(num_decision, desc="Simulating"):
             t = self.solution.pop(0)
@@ -366,7 +362,6 @@ class Simulator:
                     operator=t.operator,
                     memory_block=None,
                     channel_ids=None,
-                    is_last=self.commit_type[t]
                 ))
                 for op, memory_block, channel_ids in self.purge_type[t]:
                     self.solution.append(Decision(
@@ -375,11 +370,10 @@ class Simulator:
                         operator=op,
                         memory_block=memory_block,
                         channel_ids=channel_ids,
-                        is_last=False
                     ))
 
             elif t.decision_type == DecisionType.COMMIT:
-                memory_delta = t.operator.commit(t.is_last)
+                memory_delta = t.operator.commit()
                 current_memory -= memory_delta
                 self.memory_deltas.append(
                     MemoryDelta(t.wall_time, -memory_delta))

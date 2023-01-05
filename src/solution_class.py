@@ -51,10 +51,6 @@ class Decision:
     # (NOTE: num input channels for forward, num output channels for backward)
     channel_ids: List[int]  # apply to which channels
 
-    # NOTE: this is only for commit decision
-    #   is this commit the last commit for forward/backward ?
-    is_last: bool = False
-
     def __hash__(self) -> int:
         return id(self)
 

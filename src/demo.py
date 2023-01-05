@@ -79,9 +79,9 @@ if __name__ == "__main__":
         ]
         channel_ids_list = [
             list(range(op.num_input_channels)),
-            list(range(op.num_input_channels)),
             list(range(op.num_output_channels)),
-            list(range(op.num_input_channels))
+            list(range(op.num_output_channels)),
+            list(range(op.num_output_channels))
         ]
         for i in range(4):
             decision = Decision(wall_time=current_wall_time,
