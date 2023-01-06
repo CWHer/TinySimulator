@@ -1,7 +1,13 @@
-from operator_class import ChannelType, Operator
-from runtime_class import RunTime
-from simulator import Simulator
-from solution_class import Decision, DecisionType, MemoryBlockType
+# fmt: off
+import sys
+sys.path.append('..')
+
+from src.operator_class import ChannelType, Operator
+from src.runtime_class import RunTime
+from src.simulator import Simulator
+from src.solution_class import Decision, DecisionType, MemoryBlockType
+# fmt: on
+
 
 if __name__ == "__main__":
     # Let's build a simple network
