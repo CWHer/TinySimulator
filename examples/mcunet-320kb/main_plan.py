@@ -180,6 +180,101 @@ if __name__ == "__main__":
         # print("====", computation_graph.index(op), "====")
         # print("====", decision.channel_ids, "====")
         decisions.append(decision)
+
+    # NOTE: backward phase
+    #   1. allocate gradient data
+    #   2. allocate pass gradient data
+    #   3. backward & optimize
+    for op in reversed(computation_graph):
+        decision_types = [
+            DecisionType.LOAD,
+            DecisionType.ALLOCATE,
+            DecisionType.ALLOCATE if len(
+                op.pred_ops) > 0 else None,  # source op
+            DecisionType.BACKWARD,
+            DecisionType.OPTIMIZE,
+            DecisionType.STORE
+        ]
+        memory_blocks = [
+            MemoryBlockType.INPUT,
+            MemoryBlockType.GRAD,
+            MemoryBlockType.PASS_GRAD,
+            None,
+            None,
+            MemoryBlockType.PARAM
+        ]
+        channel_ids_list = [
+            list(range(op.num_input_channels)),
+            list(range(op.num_output_channels)),
+            list(range(op.num_input_channels)),
+            list(range(op.num_output_channels)),
+            list(range(op.num_output_channels)),
+            list(range(op.num_output_channels))
+        ]
+        for i in range(6):
+            if decision_types[i] is None:
+                continue
+
+            channel_offset = 0 if not op in op_to_prune \
+                else channels_to_prune[op_to_prune.index(op)]
+
+            if decision_types[i] == DecisionType.LOAD:
+                tmp_wall_time = max(input_device.get(),
+                                    output_device.get())
+                decision = Decision(wall_time=tmp_wall_time,
+                                    decision_type=decision_types[i],
+                                    operator=op,
+                                    memory_block=memory_blocks[i],
+                                    channel_ids=channel_ids_list[i])
+                input_device.put(decision)
+                decisions.append(decision)
+            elif decision_types[i] == DecisionType.ALLOCATE:
+                tmp_wall_time = compute_device.get()
+                decision = Decision(wall_time=tmp_wall_time,
+                                    decision_type=decision_types[i],
+                                    operator=op,
+                                    memory_block=memory_blocks[i],
+                                    channel_ids=channel_ids_list[i][channel_offset:]
+                                    if memory_blocks[i] == MemoryBlockType.GRAD
+                                    else channel_ids_list[i])
+                # NOTE: DO NOT pass gradient to pruned channels
+                if op in op_next_to_pruned and \
+                        memory_blocks[i] == MemoryBlockType.PASS_GRAD:
+                    pred_offset = channels_to_prune[
+                        op_next_to_pruned.index(op)]
+                    decision.channel_ids = channel_ids_list[i][pred_offset:]
+                compute_device.put(decision)
+                decisions.append(decision)
+            elif decision_types[i] == DecisionType.BACKWARD:
+                tmp_wall_time = max(input_device.get(),
+                                    compute_device.get())
+                decision = Decision(wall_time=tmp_wall_time,
+                                    decision_type=decision_types[i],
+                                    operator=op,
+                                    memory_block=memory_blocks[i],
+                                    channel_ids=channel_ids_list[i][channel_offset:])
+                compute_device.put(decision)
+                decisions.append(decision)
+            elif decision_types[i] == DecisionType.OPTIMIZE:
+                tmp_wall_time = compute_device.get()
+                decision = Decision(wall_time=tmp_wall_time,
+                                    decision_type=decision_types[i],
+                                    operator=op,
+                                    memory_block=memory_blocks[i],
+                                    channel_ids=channel_ids_list[i][channel_offset:])
+                compute_device.put(decision)
+                decisions.append(decision)
+            elif decision_types[i] == DecisionType.STORE:
+                tmp_wall_time = max(
+                    compute_device.get(), output_device.get())
+                decision = Decision(wall_time=tmp_wall_time,
+                                    decision_type=decision_types[i],
+                                    operator=op,
+                                    memory_block=memory_blocks[i],
+                                    channel_ids=channel_ids_list[i][channel_offset:])
+                decisions.append(decision)
+                output_device.put(decision)
+
     simulator = Simulator(runtime, computation_graph)
     simulator.staticAnalysis(decisions)
     simulator.dynamicSim()
