@@ -12,6 +12,24 @@ Given operators/device specifications and execution plan, the simulator yields d
 
 In the following section, we briefly describe some important classes.
 
+
+
+## Important Notes
+
+1. As our application scenario is TinyML, we assume each operator (partition) can saturate the underlying accelerator. Thus, we DO NOT consider the parallelism of operators.
+
+2. We assume the underlying machine with two levels of hierarchical memory. The slow memory (e.g., NVMe) CAN NOT be directly used in computation, but it supports full-duplex loading & storing.
+
+3. We assume fast memory allocation & copy is immediate without any time elapse.
+
+4. For simplicity, we DO NOT consider technics like re-materialization. (TODO)
+
+5. We assume pruning is output channel wise. Thus, if an operator is not pruned entirely, it can pass gradient to its predecessors.
+
+6. We support operator-level (channel-wise) parallelism to further reduce the memory footprint.
+
+
+
 ### Operator
 
 There are two kinds of relations between channels, `AllToAll` (e.g., linear) and `OneToOne` (e.g., batch norm).
@@ -126,7 +144,18 @@ class Decision:
 
 ## Getting Started
 
-We provide a simple demo in `src/demo.py`.
+```bash
+# run demo
+cd examples
+python demo.py
+# run mcunet-320kb
+cd examples/mcunet-320kb
+python main_plan.py
+```
+
+### Simple Demo
+
+We provide a simple demo in `examples/demo.py`.
 
 The steps for generating this simple execution plan can be summarized as follows:
 
@@ -151,6 +180,27 @@ The steps for generating this simple execution plan can be summarized as follows
   3. execute backward & optimize for not pruned channels
 
 - Finally, store all parameters to slow memory
+
+
+
+## Files
+
+```
+│  README.md
+├─examples
+│  │  demo.py
+│  └─mcunet-320kb
+│       main_plan.py
+│       network_config.py
+│       op_wrappers.py
+└─src
+    operator_class.py
+    runtime_class.py
+    simulator.py
+    solution_class.py
+    utils.py
+    __init__.py
+```
 
 
 
