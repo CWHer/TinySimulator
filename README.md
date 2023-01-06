@@ -20,11 +20,11 @@ In the following section, we briefly describe some important classes.
 
 2. We assume the underlying machine with two levels of hierarchical memory. The slow memory (e.g., NVMe) CAN NOT be directly used in computation, but it supports full-duplex loading & storing.
 
-3. We assume fast memory allocation & copy is immediate without any time elapse.
+3. We assume fast memory allocation & copy is immediate without any time elapsing.
 
 4. For simplicity, we DO NOT consider technics like re-materialization. (TODO)
 
-5. We assume pruning is output channel wise. Thus, if an operator is not pruned entirely, it can pass gradient to its predecessors.
+5. We assume pruning is output channel-wise. Thus, if an operator is not pruned entirely, it can pass gradient to its predecessors.
 
 6. We support operator-level (channel-wise) parallelism to further reduce the memory footprint.
 
@@ -143,6 +143,8 @@ class Decision:
 
 
 ## Getting Started
+
+**NOTE**: Running these programs will generate timeline figure of the model execution.
 
 ```bash
 # run demo

@@ -418,6 +418,8 @@ class Simulator:
         return self.total_time, max(memory_usages)
 
     def plotTimeline(self, file_name="timeline.png"):
+        print("Plotting timeline...")
+
         import matplotlib.pyplot as plt
         plt.figure(figsize=(14, 5))
 
@@ -460,3 +462,4 @@ class Simulator:
         plt.ylabel("Device")
 
         plt.savefig(file_name)
+        print("Timeline saved to {}".format(file_name))
