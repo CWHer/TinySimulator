@@ -219,6 +219,10 @@ class Operator:
         # fmt: off
         memory_records = [self.__checkMemStat(*args) for args in args_list]
         if None in memory_records: return None
+        # HACK: input_locations are copied from pred_op.output_locations
+        #   as we assume copy is immediate, we DO NOT change input_locations into RUNNING
+        memory_records[-1].recover()
+        memory_records.pop()
 
         pred_channels = self.__findPredChannels(self.pred_ops, pred_channel_ids)
         # fmt: on
@@ -274,7 +278,7 @@ class Operator:
         memory_records = self.canForward(channel_ids)
         printErrorMsg(memory_records is None,
                       "Cannot forward since memory is not ready")
-        r = len(channel_ids) / self.num_input_channels
+        r = len(channel_ids) / self.num_output_channels
         memory_delta = r * self.forward_memory_peek
         time_elapsed = r * self.forward_time_elapsed
         for memory_record in memory_records:
