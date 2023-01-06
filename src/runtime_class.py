@@ -5,7 +5,9 @@ from enum import Enum
 @dataclasses.dataclass
 class RunTime:
     # machine related
+    # unit: Byte
     memory_limit: float  # fast memory limit
+    # unit: Byte/ms
     cross_level_bandwidth_read: float
     cross_level_bandwidth_write: float
 

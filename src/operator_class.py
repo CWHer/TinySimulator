@@ -4,8 +4,8 @@ import dataclasses
 from enum import Enum
 from typing import List, Optional, Set, Tuple
 
-from runtime_class import MemoryType
-from utils import printError, printErrorMsg
+from .runtime_class import MemoryType
+from .utils import printError, printErrorMsg
 
 
 class MemoryRecord:
@@ -53,12 +53,14 @@ class ChannelType(Enum):
 @dataclasses.dataclass
 class Operator:
     # computation related
+    # unit: ms & Byte
     forward_memory_peek: float
     forward_time_elapsed: float
     backward_memory_peek: float
     backward_time_elapsed: float
     optimize_time_elapsed: float
 
+    # unit: Byte
     param_size: float
     input_size: float
     output_size: float
@@ -123,8 +125,8 @@ class Operator:
 
     def init(self, pred_ops, succ_ops,
              output_channel_accuracy: List[float]):
-        self.pred_ops = pred_ops
-        self.succ_ops = succ_ops
+        self.pred_ops = list(filter(None, pred_ops))
+        self.succ_ops = list(filter(None, succ_ops))
         self.pruned_output_channels = set()
         self.output_channel_accuracy = output_channel_accuracy
         self.param_locations = [MemoryType.SLOW] * self.num_output_channels
@@ -240,7 +242,7 @@ class Operator:
             (self.grad_locations, {MemoryType.FAST}, channel_ids),
             (self.param_locations, {MemoryType.FAST}, channel_ids)
         ]
-        # HACK: only need to pass grad to not pruned channels
+        # NOTE: only need to pass grad to not pruned channels
         input_ids = list(range(self.num_input_channels))
         pred_channels = self.__findPredChannels(self.pred_ops, input_ids)
         not_pruned_channels = [

@@ -6,11 +6,11 @@ from typing import Dict, List, Set, Tuple
 
 import tqdm
 
-from operator_class import MemoryType, Operator
-from runtime_class import RunTime
-from solution_class import (COMPUTE_DECISIONS, Decision, DecisionType,
-                            MemoryBlockType, decisionRank)
-from utils import printError, printErrorMsg
+from .operator_class import MemoryType, Operator
+from .runtime_class import RunTime
+from .solution_class import (COMPUTE_DECISIONS, Decision, DecisionType,
+                             MemoryBlockType)
+from .utils import printError, printErrorMsg
 
 
 class Simulator:
@@ -238,7 +238,7 @@ class Simulator:
                     (t.operator, MemoryBlockType.GRAD, t.channel_ids))
 
         # Pass 4
-        self.solution = sorted(solution, key=decisionRank)
+        self.solution = sorted(solution)
 
     def dynamicSim(self):
         # NOTE:
@@ -286,7 +286,7 @@ class Simulator:
                     # fmt: off
                     print("===== {} Done =====".format(phase))
                     print("Current Time: {:.2f} ms".format(self.cpu_usages[-1].end))
-                    print("Current Memory: {:.2f} MB".format(current_memory))
+                    print("Current Memory: {:.2f} kB".format(current_memory / 1024))
                     # fmt: on
 
             if t.decision_type == DecisionType.LOAD:
@@ -387,7 +387,7 @@ class Simulator:
                     "Unknown decision type: {}".format(t.decision_type))
 
             # FIXME: HACK: apparently heap is better
-            self.solution.sort(key=decisionRank)
+            self.solution.sort()
 
         printError(len(self.solution) != 0)
         printErrorMsg(not all([getattr(op, f"isAllDone")()
@@ -410,14 +410,14 @@ class Simulator:
         )
         print("===== All Done =====")
         print("Current Time: {:.2f} ms".format(self.total_time))
-        print("Current Memory: {:.2f} MB".format(current_memory))
+        print("Current Memory: {:.2f} kB".format(current_memory / 1024))
 
     def getStats(self) -> Tuple[float, float]:
         memory_usages = itertools.accumulate(
             [t.memory_delta for t in self.memory_deltas])
         return self.total_time, max(memory_usages)
 
-    def plotTimeline(self):
+    def plotTimeline(self, file_name="timeline.png"):
         import matplotlib.pyplot as plt
         plt.figure(figsize=(14, 5))
 
@@ -436,10 +436,11 @@ class Simulator:
                 t.wall_time, memory_usages[-1].memory_usage + t.memory_delta))
 
         plt.plot([t.wall_time for t in memory_usages],
-                 [t.memory_usage for t in memory_usages],
+                 [t.memory_usage / 1024 / 1024 for t in memory_usages],
                  color="purple", alpha=0.5)
         plt.plot([t.wall_time for t in memory_usages],
-                 [self.run_time.memory_limit] * len(memory_usages),
+                 [self.run_time.memory_limit / 1024 / 1024] *
+                 len(memory_usages),
                  color="red", alpha=0.5)
         plt.xlabel("Time (ms)")
         plt.ylabel("Memory (MB)")
@@ -458,4 +459,4 @@ class Simulator:
         plt.xlabel("Time (ms)")
         plt.ylabel("Device")
 
-        plt.savefig("timeline.png")
+        plt.savefig(file_name)

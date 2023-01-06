@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import dataclasses
 from enum import Enum
 from typing import List
 
-from operator_class import Operator
+from .operator_class import Operator
 
 
 class DecisionType(Enum):
@@ -54,12 +56,13 @@ class Decision:
     def __hash__(self) -> int:
         return id(self)
 
-
-def decisionRank(x: Decision):
-    # NOTE: when some decisions have the same wall_time,
-    #   we need to compute them in certain order
-    # FIXME: this may cause some bug when wall_time is fractional
-    index = len(ZERO_COST_DECISIONS) \
-        if not x.decision_type in ZERO_COST_DECISIONS \
-        else ZERO_COST_DECISIONS.index(x.decision_type)
-    return x.wall_time * (len(ZERO_COST_DECISIONS) + 1) + index
+    def __lt__(self, other: Decision) -> bool:
+        lhs_index = len(ZERO_COST_DECISIONS) \
+            if not self.decision_type in ZERO_COST_DECISIONS \
+            else ZERO_COST_DECISIONS.index(self.decision_type)
+        rhs_index = len(ZERO_COST_DECISIONS) \
+            if not other.decision_type in ZERO_COST_DECISIONS \
+            else ZERO_COST_DECISIONS.index(other.decision_type)
+        return self.wall_time < other.wall_time \
+            if self.wall_time != other.wall_time \
+            else lhs_index < rhs_index
