@@ -54,9 +54,9 @@ class ChannelType(Enum):
 class Operator:
     # computation related
     # unit: ms & Byte
-    forward_memory_peek: float
+    forward_memory_peak: float
     forward_time_elapsed: float
-    backward_memory_peek: float
+    backward_memory_peak: float
     backward_time_elapsed: float
     optimize_time_elapsed: float
 
@@ -279,7 +279,7 @@ class Operator:
         printErrorMsg(memory_records is None,
                       "Cannot forward since memory is not ready")
         r = len(channel_ids) / self.num_output_channels
-        memory_delta = r * self.forward_memory_peek
+        memory_delta = r * self.forward_memory_peak
         time_elapsed = r * self.forward_time_elapsed
         for memory_record in memory_records:
             memory_record.lock()
@@ -295,7 +295,7 @@ class Operator:
         printErrorMsg(memory_records is None,
                       "Cannot backward since memory is not ready")
         r = len(channel_ids) / self.num_output_channels
-        memory_delta = r * self.backward_memory_peek
+        memory_delta = r * self.backward_memory_peak
         time_elapsed = r * self.backward_time_elapsed
         for memory_record in memory_records:
             memory_record.lock()

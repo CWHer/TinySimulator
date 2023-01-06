@@ -55,9 +55,9 @@ There are two kinds of relations between channels, `AllToAll` (e.g., linear) and
 
 ```python
 class Operator:
-    forward_memory_peek: float     # extra memory usage during forward (i.e., DO NOT include input, param, ...)
+    forward_memory_peak: float     # extra memory usage during forward (i.e., DO NOT include input, param, ...)
     forward_time_elapsed: float    # time elapsed during forward
-    backward_memory_peek: float    # extra memory usage during backward 
+    backward_memory_peak: float    # extra memory usage during backward 
     backward_time_elapsed: float   # time elapsed during backward
     optimize_time_elapsed: float   # time elapsed during optimize
 

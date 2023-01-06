@@ -34,11 +34,11 @@ def Conv2d(input_shape, in_channel, out_channel, kernel_size,
         in_channel * out_channel / groups
     pred_optim_elapse = np.poly1d(add_coeff)(param_size)
     # NOTE:
-    #   forward_memory_peek: output && im2col
+    #   forward_memory_peak: output && im2col
     return Operator(
-        forward_memory_peek=im2col_size,
+        forward_memory_peak=im2col_size,
         forward_time_elapsed=pred_time_elapse * CPU_slowdown,
-        backward_memory_peek=im2col_size,
+        backward_memory_peak=im2col_size,
         backward_time_elapsed=2 * pred_time_elapse * CPU_slowdown,
         optimize_time_elapsed=pred_optim_elapse * CPU_slowdown,
         param_size=param_size,
@@ -59,9 +59,9 @@ def BatchNorm2d(input_shape):
     param_size = 2 * features
     pred_time_elapse = np.poly1d(profile_coeff)(input_size)
     return Operator(
-        forward_memory_peek=4 * features,
+        forward_memory_peak=4 * features,
         forward_time_elapsed=pred_time_elapse * CPU_slowdown,
-        backward_memory_peek=input_size,
+        backward_memory_peak=input_size,
         backward_time_elapsed=2 * pred_time_elapse * CPU_slowdown,
         optimize_time_elapsed=np.poly1d(add_coeff)(param_size) * CPU_slowdown,
         param_size=param_size,
@@ -81,9 +81,9 @@ def ReLU(input_shape):
     input_size = channels * H_in * W_in
     pred_time_elapse = np.poly1d(profile_coeff)(input_size)
     return Operator(
-        forward_memory_peek=0,
+        forward_memory_peak=0,
         forward_time_elapsed=pred_time_elapse * CPU_slowdown,
-        backward_memory_peek=0,
+        backward_memory_peak=0,
         backward_time_elapsed=2 * pred_time_elapse * CPU_slowdown,
         optimize_time_elapsed=0,
         param_size=0,
@@ -104,9 +104,9 @@ def pBatchNorm2d(input_shape):
     param_size = 2 * features
     pred_time_elapse = np.poly1d(profile_coeff)(input_size)
     return Operator(
-        forward_memory_peek=4 * features,
+        forward_memory_peak=4 * features,
         forward_time_elapsed=pred_time_elapse * CPU_slowdown,
-        backward_memory_peek=input_size,
+        backward_memory_peak=input_size,
         backward_time_elapsed=2 * pred_time_elapse * CPU_slowdown,
         optimize_time_elapsed=np.poly1d(add_coeff)(param_size) * CPU_slowdown,
         param_size=param_size,
@@ -126,9 +126,9 @@ def pReLU(input_shape):
     input_size = channels * H_in * W_in
     pred_time_elapse = np.poly1d(profile_coeff)(input_size)
     return Operator(
-        forward_memory_peek=0,
+        forward_memory_peak=0,
         forward_time_elapsed=pred_time_elapse * CPU_slowdown,
-        backward_memory_peek=0,
+        backward_memory_peak=0,
         backward_time_elapsed=2 * pred_time_elapse * CPU_slowdown,
         optimize_time_elapsed=0,
         param_size=0,
@@ -148,9 +148,9 @@ def AvgPool(input_shape):
     # NOTE:
     #   singleton operator: (1, 160, 6, 6) -> (1, 160)
     return Operator(
-        forward_memory_peek=3 * input_size,
+        forward_memory_peak=3 * input_size,
         forward_time_elapsed=0.036 * CPU_slowdown,
-        backward_memory_peek=0,
+        backward_memory_peak=0,
         backward_time_elapsed=0.012 * CPU_slowdown,
         optimize_time_elapsed=0,
         param_size=0,
@@ -169,9 +169,9 @@ def Add(input_shape):
     input_size = channels * H_in * W_in
     pred_time_elapse = np.poly1d(add_coeff)(input_size)
     return Operator(
-        forward_memory_peek=0,
+        forward_memory_peak=0,
         forward_time_elapsed=pred_time_elapse * CPU_slowdown,
-        backward_memory_peek=0,
+        backward_memory_peak=0,
         backward_time_elapsed=2 * pred_time_elapse * CPU_slowdown,
         optimize_time_elapsed=0,
         param_size=0,
@@ -192,9 +192,9 @@ def Add(input_shape):
 #     # NOTE:
 #     #   singleton operator: (1, 160) -> (1, 2)
 #     return Operator(
-#         forward_memory_peek=0,
+#         forward_memory_peak=0,
 #         forward_time_elapsed=(0.0464 + 0.0065) * CPU_slowdown,
-#         backward_memory_peek=0,
+#         backward_memory_peak=0,
 #         backward_time_elapsed=(2 * 0.0464 + 0.011) * CPU_slowdown,
 #         optimize_time_elapsed=np.poly1d(add_coeff)(param_size) * CPU_slowdown,
 #         param_size=param_size,
